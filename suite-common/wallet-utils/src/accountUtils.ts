@@ -685,6 +685,15 @@ export const haveTokenBalancesChanged = (
     return freshDiffers || heldTokenGone;
 };
 
+/**
+ * A direct-RPC backend scans a window of blocks rather than the whole chain. This is the block to
+ * send as `from` to reach one step further back, or undefined once nothing older is reachable.
+ */
+export const getOlderHistoryFrom = (account: Account) =>
+    account.networkType === 'ethereum' && account.backendType === 'evm-rpc'
+        ? account.misc.olderHistoryFrom
+        : undefined;
+
 export const isAccountOutdated = (account: Account, freshInfo: AccountInfo) => {
     if (
         // if backend/coin supports addrTxCount, compare it instead of total
