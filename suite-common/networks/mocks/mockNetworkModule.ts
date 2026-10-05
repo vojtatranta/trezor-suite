@@ -15,5 +15,9 @@ export const mockNetworkModule = (
     getSupportedNetworks: () => [],
     getAccountSyncInterval: () => DEFAULT_ACCOUNT_SYNC_INTERVAL,
     getNetworkConfig: () => ({ ...mockNetworkMetadata.btc, color: '#000000', protocols: [] }),
+    icon: {
+        getIcons: () => ({ coin: 'coin.svg', network: 'network.svg', testnet: false }),
+        getTokenLogoIdentifiers: (_symbol, contract) => [contract],
+    },
     ...overrides,
 });

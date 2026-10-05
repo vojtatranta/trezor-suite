@@ -4,6 +4,10 @@ import { type NetworkModuleDefinition, createNetworkModule } from './createNetwo
 
 const createTestResolver = () => {
     const definition: NetworkModuleDefinition<'aaa' | 'taaa'> = {
+        icon: {
+            getIcons: () => ({ testnet: false, coin: 'coin.svg', network: 'network.svg' }),
+            getTokenLogoIdentifiers: (_symbol, contract) => [contract],
+        },
         addressValidator: {
             isAddressValid: () => true,
             getAddressType: () => undefined,
@@ -64,6 +68,10 @@ describe('createNetworkModule account sync interval', () => {
         symbol === 'aaa' ? 40_000 : 60_000,
     );
     const networkModule = createNetworkModule(['aaa', 'taaa'], {
+        icon: {
+            getIcons: () => ({ testnet: false, coin: 'coin.svg', network: 'network.svg' }),
+            getTokenLogoIdentifiers: (_symbol, contract) => [contract],
+        },
         addressValidator: {
             isAddressValid: () => true,
             getAddressType: () => undefined,

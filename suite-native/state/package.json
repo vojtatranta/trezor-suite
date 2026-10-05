@@ -66,6 +66,7 @@
         "@suite-native/transaction-management": "workspace:*",
         "@trezor/connect": "workspace:*",
         "@trezor/env-utils": "workspace:*",
+        "@trezor/network-assets-types": "workspace:*",
         "@trezor/transport-common": "workspace:*",
         "@trezor/transport-native-bluetooth": "workspace:*",
         "@trezor/transport-native-usb": "workspace:*",

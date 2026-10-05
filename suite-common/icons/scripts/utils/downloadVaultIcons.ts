@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { createHttpClient, isResponseError } from '@suite-common/http-client';
 import { type Network, getNetwork, getNetworkByCoingeckoId } from '@suite-common/wallet-config';
+import { createEthereumCoinIconReader } from '@trezor/network-ethereum-assets';
 import { isWrappedNativeToken } from '@trezor/network-ethereum-suite-common';
 
 import { rasterizeSvg } from './images';
@@ -14,10 +15,12 @@ import {
     ICONS_URL_BASE,
     createCoinImageName,
 } from '../../src/coinImages';
-import { type NetworkIconSymbol } from '../../src/iconSymbols';
-import { isCryptoIconSymbol } from '../../src/iconUtils';
-import { CRYPTO_ICONS_SVG_PATH, FILES_CRYPTOICONS_PATH, YIELD_VAULTS_URL } from '../constants';
+import { FILES_CRYPTOICONS_PATH, YIELD_VAULTS_URL } from '../constants';
 import { type YieldVault, yieldVaultsSchema } from '../schemas';
+
+const ethereumCoinIconReader = createEthereumCoinIconReader({
+    readFile: path => fs.readFile(path),
+});
 
 const earnYieldApi = createHttpClient({
     onError: error => {
@@ -54,8 +57,7 @@ const fetchPublishedIcon = (fileName: string) =>
  * themselves instead of the CoinGecko one.
  */
 type VaultIconSource =
-    | { kind: 'published'; coingeckoId: string }
-    | { kind: 'bundled'; networkSymbol: NetworkIconSymbol };
+    { kind: 'published'; coingeckoId: string } | { kind: 'bundled'; networkSymbol: string };
 
 /**
  * A vault-position token renders as the asset the vault is denominated in — except that a
@@ -73,7 +75,7 @@ const resolveIconSource = (network: Network, vault: YieldVault): VaultIconSource
     // `TokenIcon` resolves a native coin the same way and renders it through `NativeTokenIcon`, so
     // deriving the vault icon from any other source would make it differ from the coin it stands
     // for everywhere else in the app.
-    if (isCryptoIconSymbol(nativeSymbol)) {
+    if (ethereumCoinIconReader.isSupportedNetwork(nativeSymbol)) {
         return { kind: 'bundled', networkSymbol: nativeSymbol };
     }
 
@@ -103,15 +105,15 @@ const fetchPublishedSourceIcon = async (
 };
 
 const renderBundledSourceIcon = async (
-    networkSymbol: NetworkIconSymbol,
+    networkSymbol: string,
     size: CoinImageSize,
 ): Promise<Buffer | undefined> => {
-    const svgPath = join(CRYPTO_ICONS_SVG_PATH, `${networkSymbol}.svg`);
-
     try {
-        return await rasterizeSvg(await fs.readFile(svgPath), size);
+        const svg = await ethereumCoinIconReader.readCoinIcon(networkSymbol);
+
+        return svg ? await rasterizeSvg(svg, size) : undefined;
     } catch (error) {
-        console.error('Vault icons: failed to render the bundled icon:', svgPath, error);
+        console.error('Vault icons: failed to render the bundled icon:', networkSymbol, error);
 
         return undefined;
     }

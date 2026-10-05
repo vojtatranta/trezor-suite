@@ -2,7 +2,7 @@ import { HiddenPlaceholder } from '@suite/discreet-mode';
 import { Translation } from '@suite/intl';
 import { selectTradingCoinSymbolByCryptoId } from '@suite-common/trading';
 import { selectAccountByKey } from '@suite-common/wallet-core';
-import { ExchangeInfoNotification } from '@trezor/product-components';
+import { TokenIcon, ExchangeInfoNotification } from '@trezor/product-components';
 
 import type { NotificationRendererProps } from 'src/components/suite/notifications/NotificationRenderer/NotificationRenderer';
 import type { NotificationViewProps } from 'src/components/suite/notifications/Notifications/NotificationGroup/NotificationList/NotificationView';
@@ -69,11 +69,27 @@ export const ExchangeInfoRenderer = ({ render: View, ...props }: ExchangeInfoRen
                             />
                         }
                         send={{
-                            ...send,
+                            amount: send.amount,
+                            icon: (
+                                <TokenIcon
+                                    symbol={send.symbol}
+                                    contractAddress={send.contractAddress}
+                                    placeholder={sendSymbol || send.symbol}
+                                    size={20}
+                                />
+                            ),
                             displaySymbol: sendSymbol || send.symbol,
                         }}
                         receive={{
-                            ...receive,
+                            amount: receive.amount,
+                            icon: (
+                                <TokenIcon
+                                    symbol={receive.symbol}
+                                    contractAddress={receive.contractAddress}
+                                    placeholder={receiveSymbol || receive.symbol}
+                                    size={20}
+                                />
+                            ),
                             displaySymbol: receiveSymbol || receive.symbol,
                         }}
                         renderAmount={(amount, side) => (

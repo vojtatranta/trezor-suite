@@ -1,7 +1,8 @@
 import { memo, useCallback, useMemo, useRef } from 'react';
 
 import { Translation, type TranslationKey, useTranslation } from '@suite/intl';
-import { isNetworkIconSymbol } from '@suite-common/icons';
+import { useServices } from '@suite-common/dependency-injection';
+import { injectNetworkIconRegistry } from '@suite-common/networks';
 import { type NetworkSymbol, getNetwork } from '@suite-common/wallet-config';
 import {
     Button,
@@ -22,18 +23,22 @@ const DATA_TESTID_BASE = '@asset-picker/search';
 
 type NetworkLabelProps = { symbol: NetworkSymbol; name: string };
 
-const NetworkLabel = ({ symbol, name }: NetworkLabelProps) => (
-    <Row gap={8}>
-        {isNetworkIconSymbol(symbol) ? (
-            <NetworkIcon size={20} networkSymbol={symbol} />
-        ) : (
-            <TokenIcon size={20} symbol={symbol} />
-        )}
-        <Text typographyStyle="body-sm" textWrap="nowrap">
-            {name}
-        </Text>
-    </Row>
-);
+const NetworkLabel = ({ symbol, name }: NetworkLabelProps) => {
+    const { networkIconRegistry } = useServices(injectNetworkIconRegistry);
+
+    return (
+        <Row gap={8}>
+            {networkIconRegistry.getNetworkIcon(symbol) ? (
+                <NetworkIcon size={20} networkSymbol={symbol} />
+            ) : (
+                <TokenIcon size={20} symbol={symbol} />
+            )}
+            <Text typographyStyle="body-sm" textWrap="nowrap">
+                {name}
+            </Text>
+        </Row>
+    );
+};
 
 export type AssetPickerSearchHeaderProps = {
     placeholder: TranslationKey;
@@ -55,6 +60,7 @@ export const AssetPickerSearchHeader = memo(function AssetPickerSearchHeaderInne
     autoFocus,
 }: AssetPickerSearchHeaderProps) {
     const { translationString } = useTranslation();
+    const { networkIconRegistry } = useServices(injectNetworkIconRegistry);
     const popoverRef = useRef<PopoverRef>(null);
 
     const closePopover = useCallback(() => popoverRef.current?.close(), []);
@@ -125,7 +131,7 @@ export const AssetPickerSearchHeader = memo(function AssetPickerSearchHeaderInne
                         <Row
                             data-testid={`${DATA_TESTID_BASE}/filter/select-option-value/${networkFilter}`}
                         >
-                            {isNetworkIconSymbol(networkFilter) ? (
+                            {networkIconRegistry.getNetworkIcon(networkFilter) ? (
                                 <NetworkIcon size={20} networkSymbol={networkFilter} />
                             ) : (
                                 <TokenIcon size={20} symbol={networkFilter} />

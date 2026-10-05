@@ -1,6 +1,4 @@
 import { type Meta, type StoryObj } from '@storybook/react';
-
-import { asNetworkSymbol } from '@suite-common/wallet-config';
 import { getFramePropsStory } from '@trezor/components';
 
 import { TokenIcon as TokenIconComponent } from './TokenIcon';
@@ -10,37 +8,13 @@ import {
     allowedTokenIconSizes,
 } from './tokenIconTypes';
 
-const NETWORK_SYMBOLS = [
-    'btc',
-    'eth',
-    'pol',
-    'bsc',
-    'arb',
-    'base',
-    'op',
-    'avax',
-    'rhc',
-    'hype',
-    'sol',
-    'trx',
-    'ada',
-    'xrp',
-    'ltc',
-    'doge',
-] as const;
-
 const meta: Meta<TokenIconProps> = {
     title: 'TokenIcon',
     component: TokenIconComponent,
     argTypes: {
         ...getFramePropsStory(allowedTokenIconFrameProps).argTypes,
-        symbol: {
-            options: NETWORK_SYMBOLS,
-            control: { type: 'select' },
-        },
-        contractAddress: {
-            control: { type: 'text' },
-        },
+        symbol: { control: { type: 'text' } },
+        contractAddress: { control: { type: 'text' } },
         size: {
             options: allowedTokenIconSizes,
             control: { type: 'select' },
@@ -68,10 +42,9 @@ export default meta;
 export const NativeCoin: StoryObj<TokenIconProps> = {
     args: {
         size: 24,
-        symbol: asNetworkSymbol('eth'),
+        symbol: 'eth',
         placeholder: 'ETH',
         shouldTryToFetch: true,
-        showNetworkIcon: false,
         isBordered: true,
         ...getFramePropsStory(allowedTokenIconFrameProps).args,
     },
@@ -80,8 +53,8 @@ export const NativeCoin: StoryObj<TokenIconProps> = {
 export const Token: StoryObj<TokenIconProps> = {
     args: {
         size: 24,
-        symbol: asNetworkSymbol('eth'),
-        contractAddress: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', // USDC on Ethereum
+        symbol: 'eth',
+        contractAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
         placeholder: 'USDC',
         shouldTryToFetch: true,
         showNetworkIcon: true,

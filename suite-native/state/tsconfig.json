@@ -101,6 +101,9 @@
         { "path": "../../packages/connect" },
         { "path": "../../packages/env-utils" },
         {
+            "path": "../../networks/network-module/network-assets-types"
+        },
+        {
             "path": "../../packages/transport-common"
         },
         {

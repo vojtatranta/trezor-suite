@@ -8,7 +8,7 @@ import { type NetworkSymbol, getNetwork } from '@suite-common/wallet-config';
 import { selectEnabledNetworks, selectNetworkBlockchainInfo } from '@suite-common/wallet-core';
 import { type ConnectionStatus } from '@suite-common/wallet-types';
 import { Button } from '@trezor/components';
-import { SectionItem, TokenIcon } from '@trezor/product-components';
+import { TokenIcon, SectionItem } from '@trezor/product-components';
 import { typography } from '@trezor/theme';
 
 import { StatusLight } from 'src/components/suite';

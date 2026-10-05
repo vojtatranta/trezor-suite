@@ -1,18 +1,22 @@
 import { useMemo } from 'react';
 
-import { type NetworkSymbol, getNetwork } from '@suite-common/wallet-config';
+import { asNetworkSymbol } from '@trezor/network-module-types';
+
+import { useServices } from '../../services/ServicesProvider';
 
 import { type CommonIconSetProps, IconSetBase, IconWrapper } from '../IconSet/IconSetBase';
 import { TokenIcon } from '../TokenIcon/TokenIcon';
+import { NativeTokenIcon } from '../TokenIcon/NativeTokenIcon';
+import { getIconUrl } from '../TokenIcon/getTokenIconSources';
 
 export type TokenIconSetToken = {
     contract?: string | null;
     symbol?: string;
-    networkSymbol?: NetworkSymbol;
+    networkSymbol?: string;
 };
 
 export type TokenIconSetProps = CommonIconSetProps & {
-    symbol: NetworkSymbol;
+    symbol: string;
     tokens: readonly TokenIconSetToken[];
     isTransparent?: boolean;
 };
@@ -28,6 +32,7 @@ export const TokenIconSet = ({
     isReversed = false,
     isTransparent = false,
 }: TokenIconSetProps) => {
+    const deps = useServices();
     const { length } = tokens;
 
     const visibleTokensContent = useMemo(() => {
@@ -36,8 +41,12 @@ export const TokenIconSet = ({
         return visibleTokens.map(token => {
             const tokenNetworkSymbol = token.networkSymbol ?? symbol;
             const key = `${tokenNetworkSymbol}-${token.contract ?? token.symbol ?? symbol}`;
-            const nativeCoinSymbol =
-                getNetwork(tokenNetworkSymbol).settlementLayer ?? tokenNetworkSymbol;
+            const nativeSrc = token.contract
+                ? undefined
+                : getIconUrl(
+                      deps.getNetworkIcon(tokenNetworkSymbol)?.nativeSrc ??
+                          deps.getIcon(asNetworkSymbol(tokenNetworkSymbol)).coin,
+                  );
 
             return (
                 <IconWrapper key={key} $size={size} $gap={gap} $length={length}>
@@ -52,13 +61,13 @@ export const TokenIconSet = ({
                             isBordered={false}
                             isTransparent={isTransparent}
                         />
-                    ) : (
-                        <TokenIcon size={size} symbol={nativeCoinSymbol} />
-                    )}
+                    ) : nativeSrc ? (
+                        <NativeTokenIcon size={size} src={nativeSrc} />
+                    ) : null}
                 </IconWrapper>
             );
         });
-    }, [tokens, maxVisibleIcons, symbol, size, gap, length, isTransparent]);
+    }, [deps, tokens, maxVisibleIcons, symbol, size, gap, length, isTransparent]);
 
     return (
         <IconSetBase

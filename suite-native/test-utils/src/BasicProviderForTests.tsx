@@ -4,8 +4,13 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { NavigationContainer } from '@react-navigation/native';
 
-import { ServicesProvider } from '@suite-common/dependency-injection';
+import { ServicesProvider, mock } from '@suite-common/dependency-injection';
 import { FormatterProvider, type FormatterProviderConfig } from '@suite-common/formatters';
+import {
+    createNetworkAssetsCompositionRoot,
+    createNetworkModuleRepository,
+    createNetworkModulesCompositionRoot,
+} from '@suite-common/networks';
 import { QueryClient, QueryClientProvider } from '@suite-common/react-query';
 import { IntlProviderForTests } from '@suite-native/intl';
 import { StylesProvider, createRenderer } from '@trezor/styles-native';
@@ -32,6 +37,15 @@ const createTestQueryClient = () =>
 
 export const BasicProviderForTests = ({ children, formattersConfig, services }: ProviderProps) => {
     const [queryClient] = useState(createTestQueryClient);
+    const [networkModules] = useState(() =>
+        createNetworkModulesCompositionRoot({ getTrezorConnect: mock() }),
+    );
+    const [networkModuleRepository] = useState(() =>
+        createNetworkModuleRepository({ networkModules }),
+    );
+    const [networkAssetsRegistry] = useState(() =>
+        createNetworkAssetsCompositionRoot({ networkModules }),
+    );
 
     return (
         <SafeAreaProvider>
@@ -39,7 +53,13 @@ export const BasicProviderForTests = ({ children, formattersConfig, services }: 
                 <IntlProviderForTests>
                     <StylesProvider theme={theme} renderer={renderer}>
                         <NavigationContainer>
-                            <ServicesProvider services={services ?? {}}>
+                            <ServicesProvider
+                                services={{
+                                    networks: { networkModuleRepository },
+                                    networkAssetsRegistry,
+                                    ...services,
+                                }}
+                            >
                                 <FormatterProvider
                                     config={formattersConfig ?? DEFAULT_FORMATTERS_CONFIG}
                                 >

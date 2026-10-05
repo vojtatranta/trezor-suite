@@ -1,6 +1,6 @@
 import { type TradeableAssetBalance, type TradingAssetOption } from '@suite-common/trading';
 import { Row } from '@trezor/components';
-import { TokenIcon, shouldShowNetworkIcon } from '@trezor/product-components';
+import { TokenIcon, useShouldShowNetworkIcon } from '@trezor/product-components';
 
 import { AssetDetails } from '../AssetDetails';
 import { AssetAmount } from '../AssetRowToken/AssetAmount';
@@ -21,6 +21,8 @@ export function AssetRowAsset({
     isDisabled,
     onClick,
 }: AssetRowAssetProps) {
+    const shouldShowNetworkIcon = useShouldShowNetworkIcon();
+
     return (
         <ItemClickableContainer
             isDisabled={isDisabled}

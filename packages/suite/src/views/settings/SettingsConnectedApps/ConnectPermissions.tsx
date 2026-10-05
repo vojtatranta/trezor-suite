@@ -13,6 +13,7 @@ import {
     selectConnectAppPermissions,
 } from '@suite-common/connect-popup';
 import { useServices } from '@suite-common/dependency-injection';
+import { injectNetworkIconRegistry } from '@suite-common/networks';
 import { injectDispatch } from '@suite-common/redux-utils';
 import {
     Box,
@@ -48,7 +49,7 @@ import {
     WalletIcon,
     XCircleIcon,
 } from '@trezor/icons';
-import { NetworkIcon, isNetworkSymbolWithIcon } from '@trezor/product-components';
+import { NetworkIcon } from '@trezor/product-components';
 
 import { ConnectAppIcon } from 'src/components/suite/ConnectAppIcon';
 import { ConnectProcessLabel } from 'src/components/suite/ConnectProcessLabel';
@@ -124,9 +125,10 @@ type GroupBadgeProps = { coin?: string };
 // mirrors NetworkIcon for the device group (no coin) or altcoins that suite has
 // no network icon for.
 const GroupBadge = ({ coin }: GroupBadgeProps) => {
+    const { networkIconRegistry } = useServices(injectNetworkIconRegistry);
     const symbol = coin?.toLowerCase();
 
-    if (symbol && isNetworkSymbolWithIcon(symbol)) {
+    if (symbol && networkIconRegistry.getNetworkIcon(symbol)) {
         return <NetworkIcon networkSymbol={symbol} size={24} />;
     }
 

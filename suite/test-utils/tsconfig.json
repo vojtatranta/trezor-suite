@@ -3,11 +3,15 @@
     "compilerOptions": { "outDir": "libDev" },
     "references": [
         {
+            "path": "../../packages/product-components"
+        },
+        {
             "path": "../../suite-common/dependency-injection"
         },
         {
             "path": "../../suite-common/formatters"
         },
+        { "path": "../../suite-common/networks" },
         {
             "path": "../../suite-common/test-utils"
         },

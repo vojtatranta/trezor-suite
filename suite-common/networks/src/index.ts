@@ -78,7 +78,13 @@ export {
     type SymbolNamedAddressResolver,
 } from './createGetNamedAddressSupport';
 
+export { createNetworkAssetsCompositionRoot } from './createNetworkAssetsCompositionRoot';
 export { createNetworkModulesCompositionRoot } from './createNetworkModulesCompositionRoot';
 export type { NetworksServices, NetworksDep } from './NetworksServices';
 
 export type { Network, Networks } from './Network';
+export {
+    createNetworkIconRegistry,
+    injectNetworkIconRegistry,
+    type NetworkIconRegistryDeps,
+} from './createNetworkIconRegistry';

@@ -18,9 +18,9 @@ import { type CoinSymbol, type PermissionRequest, isCoinSymbol } from '@trezor/c
 import { CheckIcon, FadersIcon, LightningIcon } from '@trezor/icons';
 import { selectNetworkOptions, useNetworkDisplaySelector } from '@trezor/product-components';
 
+import { RequestedPermissions } from './RequestedPermissions';
 import * as trezorConnectActions from '../actions/trezorConnectActions';
 import { useActions, useSelector } from '../hooks';
-import { RequestedPermissions } from './RequestedPermissions';
 import {
     selectConnectInitError,
     selectIsConnectInitSuccess,

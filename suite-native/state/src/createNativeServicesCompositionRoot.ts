@@ -95,6 +95,7 @@ export const createNativeServicesCompositionRoot = (deps: NativeAppDeps): Native
 
     return {
         networks,
+        networkAssetsRegistry: networks.networkAssetsRegistry,
         suiteSync,
         bip329,
         ensureDelegatedIdentityKey,

@@ -6,6 +6,9 @@
         { "path": "../http-client" },
         { "path": "../wallet-config" },
         {
+            "path": "../../networks/ethereum/network-ethereum-assets"
+        },
+        {
             "path": "../../networks/ethereum/network-ethereum-suite-common"
         }
     ]

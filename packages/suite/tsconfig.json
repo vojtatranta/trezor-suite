@@ -12,6 +12,9 @@
     },
     "include": [".", "e2e", "**/*.json"],
     "references": [
+        {
+            "path": "../../networks/network-module/network-assets-types"
+        },
         { "path": "../../suite-common/address" },
         {
             "path": "../../suite-common/analytics"
@@ -75,7 +78,6 @@
         {
             "path": "../../suite-common/geolocation"
         },
-        { "path": "../../suite-common/icons" },
         { "path": "../../suite-common/logger" },
         {
             "path": "../../suite-common/message-system"

@@ -1,12 +1,13 @@
 import { type RefObject, memo, useMemo } from 'react';
 
 import { type TranslationKey, useTranslation } from '@suite/intl';
+import { useServices } from '@suite-common/dependency-injection';
 import { selectHasBitcoinOnlyFirmware } from '@suite-common/device';
-import { selectNetworkSymbolForProtocol } from '@suite-common/networks';
-import { type NetworkSymbol } from '@suite-common/wallet-config';
+import { injectNetworkIconRegistry, selectNetworkSymbolForProtocol } from '@suite-common/networks';
+import type { NetworkSymbol } from '@suite-common/wallet-config';
 import { selectEnabledNetworks } from '@suite-common/wallet-core';
 import { type GlobalSendReceiveType } from '@suite-common/wallet-types';
-import { SearchAsset } from '@trezor/product-components';
+import { NetworkIcon, SearchAsset } from '@trezor/product-components';
 
 import { useListScrollReset } from 'src/components/suite/asset-picker/hooks';
 import { useSelector } from 'src/hooks/suite';
@@ -34,6 +35,7 @@ export const AssetSearchWithNetworkFilter = memo(function AssetSearchWithNetwork
     onNetworkFilterOpen,
     shouldResetSearchOnNetworkChange = true,
 }: AssetSearchWithNetworkFilterProps) {
+    const { networkIconRegistry } = useServices(injectNetworkIconRegistry);
     const isBitcoinOnlyFirmware = useSelector(selectHasBitcoinOnlyFirmware);
 
     const [search, setSearch] = useSearchFilter();
@@ -63,10 +65,20 @@ export const AssetSearchWithNetworkFilter = memo(function AssetSearchWithNetwork
 
     useListScrollReset(listRef, search);
 
+    const networkOptions = useMemo(
+        () =>
+            networks.map(symbol => ({
+                symbol,
+                name: networkIconRegistry.getNetworkIcon(symbol)?.name ?? symbol,
+                icon: <NetworkIcon networkSymbol={symbol} size={20} />,
+            })),
+        [networks, networkIconRegistry],
+    );
+
     const selectConfig = isBitcoinOnlyFirmware
         ? undefined
         : {
-              networks,
+              networks: networkOptions,
               selectedNetwork: networkFilter,
               onChange: (networkSymbol: NetworkSymbol | undefined) => {
                   setNetworkFilter(networkSymbol);

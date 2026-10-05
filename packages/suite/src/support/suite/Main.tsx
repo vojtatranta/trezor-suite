@@ -1,6 +1,7 @@
 import { HelmetProvider } from 'react-helmet-async';
 
 import { useServices } from '@suite-common/dependency-injection';
+import { injectNetworkIconRegistry } from '@suite-common/networks';
 import { ReactQueryProvider } from '@suite-common/react-query/src/components/ReactQueryProvider';
 import { injectStore } from '@suite-common/redux-utils';
 import { SelectCacheProvider } from '@trezor/components';
@@ -25,12 +26,12 @@ type MainProps = {
 };
 
 export const Main = ({ trafficLightOffset, children }: MainProps) => {
-    const { store } = useServices(injectStore);
+    const { store, networkIconRegistry } = useServices(injectStore, injectNetworkIconRegistry);
 
     return (
         // Todo: Enable when issues are fixed (ReactTruncate & BumpFee)
         // <StrictMode>
-        <NetworkDisplayProvider store={store}>
+        <NetworkDisplayProvider store={store} services={networkIconRegistry}>
             <HelmetProvider>
                 {trafficLightOffset ?? null}
                 <ConnectPopupModals />

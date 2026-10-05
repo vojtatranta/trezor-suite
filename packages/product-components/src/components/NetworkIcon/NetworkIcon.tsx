@@ -2,14 +2,9 @@ import { ReactSVG } from 'react-svg';
 
 import styled from 'styled-components';
 
-import {
-    type NetworkIconSymbol,
-    getNetworkIconName,
-    isNetworkIconSymbol,
-    isTestnetNetworkIconSymbol,
-    networkIcons,
-} from '@suite-common/icons';
-import type { NetworkSymbol } from '@trezor/network-module-types';
+import { asNetworkSymbol } from '@trezor/network-module-types';
+
+import { useServices } from '../../services/ServicesProvider';
 
 export const allowedNetworkIconSizes = [8, 12, 16, 20, 24, 32, 40, 48, 64] as const;
 export type NetworkIconSize = (typeof allowedNetworkIconSizes)[number];
@@ -46,7 +41,7 @@ const StyledReactSVG = styled(ReactSVG)`
 ` as typeof ReactSVG;
 
 export interface NetworkIconProps {
-    networkSymbol: NetworkIconSymbol | NetworkSymbol;
+    networkSymbol: string;
     size?: NetworkIconSize;
     'data-testid'?: string;
 }
@@ -56,19 +51,15 @@ export function NetworkIcon({
     size = 32,
     'data-testid': dataTestId,
 }: NetworkIconProps) {
-    if (!isNetworkIconSymbol(networkSymbol)) {
-        console.error(`Network icon for ${networkSymbol} not found`);
-
-        return null;
-    }
-
-    const iconName = getNetworkIconName(networkSymbol);
-    const isTestnet = isTestnetNetworkIconSymbol(networkSymbol);
+    const deps = useServices();
+    const icons = deps.getIcon(asNetworkSymbol(networkSymbol));
+    if (typeof icons.network !== 'string') return null;
+    const isTestnet = icons.testnet;
 
     return (
         <IconWrapper $size={size} $isTestnet={isTestnet} data-testid={dataTestId}>
             <StyledReactSVG
-                src={networkIcons[iconName]}
+                src={icons.network}
                 beforeInjection={svg => {
                     svg.setAttribute('width', `${size}px`);
                     svg.setAttribute('height', `${size}px`);

@@ -1,0 +1,56 @@
+import { type ReactNode } from 'react';
+
+import { type NetworkSymbol } from '@suite-common/wallet-config';
+import { type TokenInfo } from '@trezor/blockchain-link-types';
+import { TokenIcon, type TransactionNotificationType } from '@trezor/product-components';
+
+type TransactionNotificationToken = Partial<TokenInfo>;
+
+type TransactionIconProps = {
+    icon?: ReactNode;
+    notificationType: TransactionNotificationType;
+    symbol: NetworkSymbol;
+    token?: TransactionNotificationToken;
+};
+
+type ShouldDisplayAssetLogoProps = {
+    notificationType: TransactionNotificationType;
+    token?: TransactionNotificationToken;
+};
+
+const shouldDisplayAssetLogo = ({ notificationType, token }: ShouldDisplayAssetLogoProps) => {
+    const isApprovalType = notificationType === 'tx-approved' || notificationType === 'tx-revoked';
+    const isTransferTokenType =
+        notificationType === 'tx-sent' || notificationType === 'tx-received';
+    const isYieldType =
+        notificationType === 'tx-yield-deposit' ||
+        notificationType === 'tx-yield-withdraw' ||
+        notificationType === 'tx-yield-claim';
+
+    return (isApprovalType || isTransferTokenType || isYieldType) && !!token;
+};
+
+export const TransactionIcon = ({
+    icon,
+    notificationType,
+    symbol,
+    token,
+}: TransactionIconProps) => {
+    if (icon) {
+        return icon;
+    }
+
+    if (shouldDisplayAssetLogo({ notificationType, token }) && token) {
+        return (
+            <TokenIcon
+                symbol={symbol}
+                contractAddress={token.contract ?? null}
+                placeholder={token.symbol ?? token.name ?? symbol}
+                size={20}
+                shouldTryToFetch
+            />
+        );
+    }
+
+    return <TokenIcon symbol={symbol} size={20} />;
+};

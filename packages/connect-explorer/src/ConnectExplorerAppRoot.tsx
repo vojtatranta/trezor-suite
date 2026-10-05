@@ -11,7 +11,9 @@ import { intermediaryTheme } from '@trezor/components';
 
 import { type ConnectExplorerReduxStore } from './store/createConnectExplorerReduxStore';
 
-type ConnectExplorerAppRootProps = AppProps & { store: ConnectExplorerReduxStore };
+type ConnectExplorerAppRootProps = AppProps & {
+    store: ConnectExplorerReduxStore;
+};
 
 type ThemeComponentProps = {
     store: ConnectExplorerReduxStore;

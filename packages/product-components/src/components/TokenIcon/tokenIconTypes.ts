@@ -1,4 +1,3 @@
-import { type NetworkSymbol } from '@suite-common/wallet-config';
 import { type FrameProps, type FramePropsKeys } from '@trezor/components';
 
 export const allowedTokenIconSizes = [16, 20, 24, 32, 40, 48, 64] as const;
@@ -8,7 +7,7 @@ export const allowedTokenIconFrameProps = ['margin'] as const satisfies FramePro
 export type AllowedFrameProps = Pick<FrameProps, (typeof allowedTokenIconFrameProps)[number]>;
 
 export interface TokenIconProps extends AllowedFrameProps {
-    symbol: NetworkSymbol;
+    symbol: string;
     contractAddress?: string | null;
     size?: TokenIconSize;
     showNetworkIcon?: boolean;
@@ -24,3 +23,5 @@ export interface TokenIconProps extends AllowedFrameProps {
      */
     wrappedTokenIcon?: 'token' | 'network';
 }
+
+export type TokenIconSource = { src: string; srcSet?: string };

@@ -3,16 +3,18 @@ import { isArrayMember } from '@trezor/utils';
 
 import type { AddressValidator } from './AddressValidator';
 import type { NamedAddressResolver } from './NamedAddressResolver';
+import type { NetworkIcon } from './NetworkIcon';
 import type { SuiteCommonNetworkConfig } from './SuiteCommonNetworkConfig';
 import type { SuiteCommonNetworkModule } from './SuiteCommonNetworkModule';
 
 /**
  * A module's own capabilities, stated in terms of the symbols that module supports.
  *
- * Everything here takes the module's closed symbol type rather than the open `NetworkSymbol`:
+ * Network behavior takes the module's closed symbol type rather than the open `NetworkSymbol`.
  * `createNetworkModule` narrows once at the boundary, so a module never restates the check.
  */
 export type NetworkModuleDefinition<TSymbol extends string> = {
+    icon: NetworkIcon<TSymbol>;
     addressValidator: AddressValidator<TSymbol>;
 
     /** Only for networks with a name system; see `NamedAddressResolver`. */
@@ -51,7 +53,18 @@ export const createNetworkModule = <TSymbol extends string>(
 
     const resolver = definition.namedAddressResolver;
 
+    const { icon } = definition;
+
     return {
+        icon: {
+            getIcons: symbol => icon.getIcons(narrow(symbol)),
+            getTokenLogoIdentifiers: (symbol, contract) =>
+                icon.getTokenLogoIdentifiers(narrow(symbol), contract),
+            isWrappedNativeToken: icon.isWrappedNativeToken
+                ? (symbol, contract) =>
+                      icon.isWrappedNativeToken?.(narrow(symbol), contract) ?? false
+                : undefined,
+        },
         addressValidator: {
             isAddressValid: (address, symbol) =>
                 definition.addressValidator.isAddressValid(address, narrow(symbol)),

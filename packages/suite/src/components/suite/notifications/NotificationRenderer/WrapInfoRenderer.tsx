@@ -4,7 +4,7 @@ import { Translation } from '@suite/intl';
 import { events } from '@suite-common/analytics';
 import { useServices } from '@suite-common/dependency-injection';
 import { type WrapTransactionAsset } from '@suite-common/toast-notifications';
-import { ExchangeInfoNotification } from '@trezor/product-components';
+import { TokenIcon, ExchangeInfoNotification } from '@trezor/product-components';
 
 import { FormattedCryptoAmount } from 'src/components/suite/FormattedCryptoAmount';
 import type { NotificationRendererProps } from 'src/components/suite/notifications/NotificationRenderer/NotificationRenderer';
@@ -14,7 +14,15 @@ type WrapInfoRendererProps = Omit<NotificationViewProps, 'messageValues'> &
     (NotificationRendererProps<'tx-wrap'> | NotificationRendererProps<'tx-unwrap'>);
 
 const withFormattedAmount = (asset: WrapTransactionAsset) => ({
-    ...asset,
+    displaySymbol: asset.displaySymbol,
+    icon: (
+        <TokenIcon
+            symbol={asset.symbol}
+            contractAddress={asset.contractAddress}
+            placeholder={asset.displaySymbol}
+            size={20}
+        />
+    ),
     amount: <FormattedCryptoAmount value={asset.amount} isCompact disableHiddenPlaceholder />,
 });
 

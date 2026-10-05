@@ -1,8 +1,17 @@
-import { type ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import { IntlProvider } from 'react-intl';
 import { Provider } from 'react-redux';
 
 import { type Store } from '@reduxjs/toolkit';
+import { ServicesProvider, mock, useServices } from '@suite-common/dependency-injection';
+import { MockedFormatterProvider } from '@suite-common/formatters/mocks';
+import {
+    createNetworkAssetsCompositionRoot,
+    createNetworkIconRegistry,
+    injectNetworkIconRegistry,
+    createNetworkModuleRepository,
+    createNetworkModulesCompositionRoot,
+} from '@suite-common/networks';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
     type RenderHookOptions,
@@ -14,13 +23,21 @@ import {
     waitForElementToBeRemoved,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-
-import { ServicesProvider } from '@suite-common/dependency-injection';
-import { MockedFormatterProvider } from '@suite-common/formatters/mocks';
+import { ServicesProvider as ProductComponentsServicesProvider } from '@trezor/product-components';
 
 import { ConnectedThemeProvider } from 'src/support/suite/ConnectedThemeProvider';
 
 import { ResponsiveContextProvider } from '../suite/ResponsiveContext';
+
+const IconServicesProvider = ({ children }: { children: ReactNode }) => {
+    const deps = useServices(injectNetworkIconRegistry);
+
+    return (
+        <ProductComponentsServicesProvider services={deps.networkIconRegistry}>
+            {children}
+        </ProductComponentsServicesProvider>
+    );
+};
 
 const testQueryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -34,21 +51,34 @@ type SuiteProvidersProps<Services extends { store: Store }> = {
 const SuiteProviders = <Services extends { store: Store }>({
     services,
     children,
-}: SuiteProvidersProps<Services>) => (
-    <QueryClientProvider client={testQueryClient}>
-        <Provider store={services.store}>
-            <ServicesProvider services={services}>
-                <ConnectedThemeProvider>
-                    <ResponsiveContextProvider>
-                        <IntlProvider locale="en">
-                            <MockedFormatterProvider>{children}</MockedFormatterProvider>
-                        </IntlProvider>
-                    </ResponsiveContextProvider>
-                </ConnectedThemeProvider>
-            </ServicesProvider>
-        </Provider>
-    </QueryClientProvider>
-);
+}: SuiteProvidersProps<Services>) => {
+    const [networkIconRegistry] = useState(() => {
+        const networkModules = createNetworkModulesCompositionRoot({ getTrezorConnect: mock() });
+
+        return createNetworkIconRegistry({
+            networkModuleRepository: createNetworkModuleRepository({ networkModules }),
+            networkAssetsRegistry: createNetworkAssetsCompositionRoot({ networkModules }),
+        });
+    });
+
+    return (
+        <QueryClientProvider client={testQueryClient}>
+            <Provider store={services.store}>
+                <ServicesProvider services={{ networkIconRegistry, ...services }}>
+                    <IconServicesProvider>
+                        <ConnectedThemeProvider>
+                            <ResponsiveContextProvider>
+                                <IntlProvider locale="en">
+                                    <MockedFormatterProvider>{children}</MockedFormatterProvider>
+                                </IntlProvider>
+                            </ResponsiveContextProvider>
+                        </ConnectedThemeProvider>
+                    </IconServicesProvider>
+                </ServicesProvider>
+            </Provider>
+        </QueryClientProvider>
+    );
+};
 
 // used in hooks tests
 export const renderWithProviders = <Services extends { store: Store }>(

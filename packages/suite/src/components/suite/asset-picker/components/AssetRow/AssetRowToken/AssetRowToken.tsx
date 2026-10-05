@@ -1,7 +1,7 @@
 import { getDisplaySymbol } from '@suite-common/wallet-config';
 import { type Account, asBaseCurrencyAmount } from '@suite-common/wallet-types';
 import { Row } from '@trezor/components';
-import { TokenIcon, shouldShowNetworkIcon } from '@trezor/product-components';
+import { TokenIcon, useShouldShowNetworkIcon } from '@trezor/product-components';
 
 import { type TokensWithRates } from 'src/utils/wallet/tokenUtils';
 
@@ -29,6 +29,8 @@ export function AssetRowToken({
     isFiatPrimary = false,
 }: AssetRowTokenProps) {
     const isDisabled = !onClick;
+
+    const shouldShowNetworkIcon = useShouldShowNetworkIcon();
 
     return (
         <ItemClickableContainer

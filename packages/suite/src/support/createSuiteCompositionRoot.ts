@@ -30,7 +30,7 @@ import { toGetter } from '@suite-common/dependency-injection';
 import { selectDeviceByStaticSessionId } from '@suite-common/device';
 import { type CommonServices } from '@suite-common/extra-dependencies';
 import { FW_HASH_CHECK_DEFAULT_TIMEOUTS } from '@suite-common/firmware-authenticity';
-import { createNetworksCompositionRoot } from '@suite-common/networks';
+import { createNetworkIconRegistry, createNetworksCompositionRoot } from '@suite-common/networks';
 import { type PlatformEncryptionDep } from '@suite-common/platform-encryption';
 import { createMigrateSuiteSyncLabelsForRbfTransactionCompositionRoot } from '@suite-common/suite-rbf-labels-migrations';
 import {
@@ -46,6 +46,7 @@ import { selectAccountsByDeviceState } from '@suite-common/wallet-core';
 import { type GetTrezorConnectPrivilegedDep } from '@trezor/connect';
 import { isDesktop } from '@trezor/env-utils';
 import type { CreateLoggerDep } from '@trezor/logger';
+import type { NetworkIconRegistryDep } from '@trezor/network-assets-types';
 
 import { type SuiteReduxStore } from 'src/reducers/createReduxStore';
 import { selectIsWindowVisible } from 'src/reducers/suite/windowReducer';
@@ -70,6 +71,7 @@ const connectInitSettings: ConnectInitSettings = {
 export type SuiteServices = CommonServices &
     DbDep &
     DesktopApiDep &
+    NetworkIconRegistryDep &
     DesktopAnalyticsDep &
     MetadataMigrationDep &
     SuiteRouterHistoryDep &
@@ -165,6 +167,10 @@ export const createSuiteServicesCompositionRoot = (deps: SuiteAppDeps): SuiteSer
         db: deps.db,
         desktopApi: deps.desktopApi,
         networks,
+        networkIconRegistry: createNetworkIconRegistry({
+            networkModuleRepository: networks.networkModuleRepository,
+            networkAssetsRegistry: networks.networkAssetsRegistry,
+        }),
         suiteSync,
         bip329,
         migrateLegacyLabelsToSuiteSync,
