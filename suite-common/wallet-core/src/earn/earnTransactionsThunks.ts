@@ -17,6 +17,7 @@ type NotifyEarnTransactionBroadcastThunkParams = {
     flow: EarnTransactionFlow;
     device?: TrezorDevice;
     stage?: 'pending' | 'sped-up';
+    prevTxid?: string;
 };
 
 export const notifyEarnTransactionBroadcastThunk = createThunk<
@@ -25,7 +26,16 @@ export const notifyEarnTransactionBroadcastThunk = createThunk<
     void
 >(
     `${EARN_TRANSACTIONS_MODULE_PREFIX}/notifyEarnTransactionBroadcastThunk`,
-    ({ account, txid, flow, device, stage = 'pending' }, { dispatch }) => {
+    ({ account, txid, flow, device, stage = 'pending', prevTxid }, { dispatch }) => {
+        if (prevTxid) {
+            dispatch(
+                earnTransactionsActions.untrackEarnTransaction({
+                    accountKey: account.key,
+                    txid: prevTxid,
+                }),
+            );
+        }
+
         dispatch(
             earnTransactionsActions.trackEarnTransaction({ accountKey: account.key, txid, flow }),
         );

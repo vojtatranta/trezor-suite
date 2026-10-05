@@ -19,6 +19,18 @@ export const selectTransactionNotifications = createMemoizedSelector(
 export const selectHasUnseenTransactionNotifications = (state: NotificationsRootState): boolean =>
     state.notifications?.some(n => !n.seen && isTransactionNotification(n)) ?? false;
 
+export const selectIsTransactionConfirmationNotified = (
+    state: NotificationsRootState,
+    txid: string,
+): boolean =>
+    state.notifications?.some(
+        notification =>
+            'txid' in notification &&
+            notification.txid === txid &&
+            (notification.type === 'tx-confirmed' ||
+                ('stage' in notification && notification.stage === 'confirmed')),
+    ) ?? false;
+
 export const selectVisibleNotificationsByType = createMemoizedSelector(
     [
         selectNotifications,

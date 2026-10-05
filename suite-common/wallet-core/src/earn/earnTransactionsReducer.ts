@@ -15,10 +15,12 @@ export type EarnTransactionFlow =
     | 'yield-claim';
 
 export type TrackedEarnTransaction = {
+    accountKey: AccountKey;
+    txid: string;
     flow: EarnTransactionFlow;
 };
 
-export type EarnTransactionsState = Record<AccountKey, Record<string, TrackedEarnTransaction>>;
+export type EarnTransactionsState = TrackedEarnTransaction[];
 
 export type EarnTransactionsRootState = {
     wallet: {
@@ -39,65 +41,44 @@ export const EARN_TRANSACTION_TOAST_TYPE = {
 
 export type EarnTransactionToastType = (typeof EARN_TRANSACTION_TOAST_TYPE)[EarnTransactionFlow];
 
-export const earnTransactionsInitialState: EarnTransactionsState = {};
-
-type TrackEarnTransactionPayload = {
-    accountKey: AccountKey;
-    txid: string;
-    flow: EarnTransactionFlow;
-};
+export const earnTransactionsInitialState: EarnTransactionsState = [];
 
 type UntrackEarnTransactionPayload = {
     accountKey: AccountKey;
     txid: string;
 };
 
-type ReplaceEarnTransactionTxidPayload = {
-    accountKey: AccountKey;
-    prevTxid: string;
-    newTxid: string;
-};
+const isTransaction =
+    ({ accountKey, txid }: UntrackEarnTransactionPayload) =>
+    (tracked: TrackedEarnTransaction) =>
+        tracked.accountKey === accountKey && tracked.txid === txid;
 
 const earnTransactionsSlice = createSlice({
     name: 'earnTransactions',
     initialState: earnTransactionsInitialState,
     reducers: {
-        trackEarnTransaction: (state, action: PayloadAction<TrackEarnTransactionPayload>) => {
-            const { accountKey, txid, flow } = action.payload;
+        trackEarnTransaction: (state, action: PayloadAction<TrackedEarnTransaction>) => {
+            const index = state.findIndex(isTransaction(action.payload));
 
-            state[accountKey] = { ...state[accountKey], [txid]: { flow } };
-        },
-        untrackEarnTransaction: (state, action: PayloadAction<UntrackEarnTransactionPayload>) => {
-            const { accountKey, txid } = action.payload;
-            const accountTransactions = state[accountKey];
-
-            if (!accountTransactions) return;
-
-            delete accountTransactions[txid];
-
-            if (Object.keys(accountTransactions).length === 0) {
-                delete state[accountKey];
+            if (index === -1) {
+                state.push(action.payload);
+            } else {
+                state[index] = action.payload;
             }
         },
-        replaceEarnTransactionTxid: (
-            state,
-            action: PayloadAction<ReplaceEarnTransactionTxidPayload>,
-        ) => {
-            const { accountKey, prevTxid, newTxid } = action.payload;
-            const accountTransactions = state[accountKey];
-            const tracked = accountTransactions?.[prevTxid];
+        untrackEarnTransaction: (state, action: PayloadAction<UntrackEarnTransactionPayload>) => {
+            const index = state.findIndex(isTransaction(action.payload));
 
-            if (!accountTransactions || !tracked) return;
-
-            delete accountTransactions[prevTxid];
-            accountTransactions[newTxid] = tracked;
+            if (index !== -1) {
+                state.splice(index, 1);
+            }
         },
     },
     extraReducers: builder => {
         builder.addCase(accountsActions.removeAccount, (state, action) => {
-            action.payload.forEach(account => {
-                delete state[account.key];
-            });
+            const removedAccountKeys = new Set(action.payload.map(account => account.key));
+
+            return state.filter(tracked => !removedAccountKeys.has(tracked.accountKey));
         });
     },
 });
@@ -109,4 +90,5 @@ export const selectTrackedEarnTransaction = (
     state: EarnTransactionsRootState,
     accountKey: AccountKey,
     txid: string,
-): TrackedEarnTransaction | undefined => state.wallet.earnTransactions[accountKey]?.[txid];
+): TrackedEarnTransaction | undefined =>
+    state.wallet.earnTransactions.find(isTransaction({ accountKey, txid }));

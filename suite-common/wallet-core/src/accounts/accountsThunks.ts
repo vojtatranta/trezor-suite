@@ -2,7 +2,11 @@ import { type AnalyticsDep, events } from '@suite-common/analytics';
 import { type DeviceRootState, selectDevices } from '@suite-common/device';
 import { type WithServices, createThunk } from '@suite-common/redux-utils';
 import { getTxsPerPage } from '@suite-common/suite-utils';
-import { notificationsActions } from '@suite-common/toast-notifications';
+import {
+    type NotificationsRootState,
+    notificationsActions,
+    selectIsTransactionConfirmationNotified,
+} from '@suite-common/toast-notifications';
 import {
     type TokenDefinitionsRootState,
     selectCoinDefinitions,
@@ -44,12 +48,6 @@ import {
     selectBlockchainHeightBySymbol,
     selectGapLimit,
 } from '../blockchain/blockchainReducer';
-import {
-    EARN_TRANSACTION_TOAST_TYPE,
-    type EarnTransactionsRootState,
-    earnTransactionsActions,
-    selectTrackedEarnTransaction,
-} from '../earn/earnTransactionsReducer';
 import { type WalletSettingsRootState } from '../settings/walletSettingsReducer';
 import {
     type StellarContractTokensRootState,
@@ -158,7 +156,7 @@ type FetchAndUpdateAccountThunkParams = {
 export type FetchAndUpdateAccountThunkState = AccountsRootState &
     BlockchainRootState &
     DeviceRootState &
-    EarnTransactionsRootState &
+    NotificationsRootState &
     StellarContractTokensRootState &
     TokenDefinitionsRootState &
     TransactionsRootState &
@@ -288,35 +286,7 @@ export const fetchAndUpdateAccountThunk = createThunk<
             const devices = selectDevices(getState());
             const accountDevice = findAccountDevice(account, devices);
             analyze.newTransactions.forEach(tx => {
-                const trackedEarnTransaction = selectTrackedEarnTransaction(
-                    getState(),
-                    account.key,
-                    tx.txid,
-                );
-
-                if (trackedEarnTransaction) {
-                    dispatch(
-                        earnTransactionsActions.untrackEarnTransaction({
-                            accountKey: account.key,
-                            txid: tx.txid,
-                        }),
-                    );
-
-                    if (tx.type !== 'failed') {
-                        dispatch(
-                            notificationsActions.addToast({
-                                type: EARN_TRANSACTION_TOAST_TYPE[trackedEarnTransaction.flow],
-                                stage: 'confirmed',
-                                device: accountDevice,
-                                descriptor: account.descriptor,
-                                symbol: account.symbol,
-                                txid: tx.txid,
-                            }),
-                        );
-
-                        return;
-                    }
-                }
+                if (selectIsTransactionConfirmationNotified(getState(), tx.txid)) return;
 
                 const token = tx.tokens?.[0];
 
