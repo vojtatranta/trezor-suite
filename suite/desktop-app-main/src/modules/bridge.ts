@@ -21,7 +21,9 @@ export const SERVICE_NAME = 'bridge';
 // The web app that moves funds off HID-only Trezor One devices (firmware 1.6.3 and older) talks
 // to the device through this bridge. Suite itself never opens such a device.
 const TREZOR_ONE_MIGRATION_ORIGIN = 'https://old-trezors.trezor.io';
-const TREZOR_ONE_MIGRATION_DEV_ORIGIN = 'http://localhost:5181';
+// Development builds also trust the local dev server and the branch deploys on the dev host. Every
+// branch deployed there shares this origin.
+const TREZOR_ONE_MIGRATION_DEV_ORIGINS = ['http://localhost:5181', 'https://dev.suite.sldev.cz'];
 
 const getHidOrigins = () => {
     // HID support targets Windows and macOS only, on Linux the bridge stays as it was.
@@ -30,7 +32,7 @@ const getHidOrigins = () => {
     }
 
     return isDevEnv
-        ? [TREZOR_ONE_MIGRATION_ORIGIN, TREZOR_ONE_MIGRATION_DEV_ORIGIN]
+        ? [TREZOR_ONE_MIGRATION_ORIGIN, ...TREZOR_ONE_MIGRATION_DEV_ORIGINS]
         : [TREZOR_ONE_MIGRATION_ORIGIN];
 };
 
