@@ -17,7 +17,7 @@ It is a separate bundle. Nothing in the repository imports it and it is not part
 
 ## Development
 
-The dev server must run on port 5181. Development builds of the bridge allow exactly the origin `http://localhost:5181` to open HID devices.
+The dev server must run on port 5181. Development builds of Trezor Suite desktop allow exactly the origins `http://localhost:5181` and `https://dev.suite.sldev.cz` to open HID devices.
 
 ```bash
 # Terminal 1: Trezor Suite desktop, which runs the bridge
@@ -38,7 +38,7 @@ yarn workspace @suite/t1-escape-app build
 yarn workspace @suite/t1-escape-app preview
 ```
 
-The `[Build] t1-escape-app` workflow builds every pull request that touches this package and uploads it to `https://dev.suite.sldev.cz/t1-escape-app/<branch>/`, the same way Suite Web is deployed. That copy is good for looking at the screens only: the bridge refuses to open a HID device for its origin.
+The `[Build] t1-escape-app` workflow builds every pull request that touches this package and uploads it to `https://dev.suite.sldev.cz/t1-escape-app/<branch>/`, the same way Suite Web is deployed. A development build of Trezor Suite desktop (`yarn suite:dev:desktop`) opens HID devices for that copy too. A production build of Suite refuses, so with it the copy is good for looking at the screens only.
 
 ## Collecting logs from a test run
 
