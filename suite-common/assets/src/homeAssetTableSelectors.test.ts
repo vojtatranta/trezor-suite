@@ -34,6 +34,7 @@ const BTC = asNetworkSymbol('btc');
 const ETH = asNetworkSymbol('eth');
 const POL = asNetworkSymbol('pol');
 const DSOL = asNetworkSymbol('dsol');
+const ADA = asNetworkSymbol('ada');
 
 /** What the desktop table folds at; the selectors take whatever a platform passes. */
 const ROW_LIMIT = 8;
@@ -48,7 +49,9 @@ type MockAccountParams = {
     index?: number;
     balance?: string;
     isVisible?: boolean;
-    tokens?: { contract: TokenAddress; balance: string; symbol?: string }[];
+    tokens?: { contract: TokenAddress; balance: string; symbol?: string; standard?: string }[];
+    networkType?: Account['networkType'];
+    misc?: Account['misc'];
 };
 
 const mockAccount = ({
@@ -58,6 +61,8 @@ const mockAccount = ({
     balance = '1',
     isVisible = true,
     tokens = [],
+    networkType,
+    misc,
 }: MockAccountParams = {}): Account =>
     ({
         key: `descriptor${index}-${symbol}-${deviceState}`,
@@ -68,6 +73,8 @@ const mockAccount = ({
         formattedBalance: balance,
         visible: isVisible,
         tokens,
+        networkType,
+        misc,
     }) as unknown as Account;
 
 // A current rate carries the dollar rate too; in dollars the two are the same number.
@@ -268,6 +275,56 @@ describe('the rows the table is given', () => {
         });
 
         expect(selectHomeAssetRowKeys(state)).toContain(`${ALICE}/dsol/${UNKNOWN_TOKEN}`);
+    });
+
+    it('keeps a token the user asked to see, even after hiding it', () => {
+        const state = createState({
+            accounts: [mockAccount({ tokens: [{ contract: USDC_ON_ETH, balance: '10' }] })],
+            hiddenTokens: [USDC_ON_ETH],
+            shownTokens: [USDC_ON_ETH],
+        });
+
+        expect(selectHomeAssetRowKeys(state)).toContain(`${ALICE}/eth/${USDC_ON_ETH}`);
+        expect(selectHiddenWalletAssetKeys(state, 'hiddenByUser')).toEqual([]);
+    });
+
+    it('leaves out a token with nothing on it', () => {
+        const state = createState({
+            accounts: [mockAccount({ tokens: [{ contract: USDC_ON_ETH, balance: '0' }] })],
+        });
+
+        expect(selectHomeAssetRowKeys(state)).toEqual([`${ALICE}/eth/`]);
+    });
+
+    it('neither shows nor hides an NFT, whatever the coin definitions say of its contract', () => {
+        const state = createState({
+            accounts: [
+                mockAccount({
+                    tokens: [{ contract: UNKNOWN_TOKEN, balance: '1', standard: 'ERC721' }],
+                }),
+            ],
+        });
+
+        expect(selectHomeAssetRowKeys(state)).toEqual([`${ALICE}/eth/`]);
+        expect(selectHiddenWalletAssetKeys(state, 'unrecognized')).toEqual([]);
+    });
+
+    it('counts the Cardano coin once, as its stake is the balance itself', () => {
+        const state = createState({
+            accounts: [
+                mockAccount({
+                    symbol: ADA,
+                    balance: '5',
+                    networkType: 'cardano',
+                    misc: { staking: { isActive: true } } as Account['misc'],
+                }),
+            ],
+            enabledNetworks: [ADA],
+        });
+
+        expect(
+            selectWalletAssetAmount(state, getWalletAssetKey({ deviceState: ALICE, symbol: ADA })),
+        ).toBe('5');
     });
 
     it('leaves out an account the user hid', () => {
