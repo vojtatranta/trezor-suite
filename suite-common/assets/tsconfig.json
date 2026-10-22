@@ -4,6 +4,7 @@
     "references": [
         { "path": "../device" },
         { "path": "../networks" },
+        { "path": "../token-definitions" },
         { "path": "../wallet-config" },
         { "path": "../wallet-core" },
         { "path": "../wallet-types" },
