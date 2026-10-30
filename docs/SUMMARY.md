@@ -78,5 +78,6 @@
     - [development on Windows](./misc/development-on-windows.md)
     - [development on Nix](./misc/development-on-nix.md)
     - [device naming](./misc/device-naming.md)
+    - [device identity](./misc/device-identity.md)
     - [review](./misc/review.md)
     - [videos](./misc/videos.md)
