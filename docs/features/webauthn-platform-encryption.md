@@ -121,6 +121,80 @@ References: [Pass-the-Passkey (SpecterOps)](https://specterops.io/wp-content/upl
 [Passkeys for Windows apps (Microsoft)](https://learn.microsoft.com/en-us/windows/apps/develop/security/use-cases),
 [Bitwarden security whitepaper](https://bitwarden.com/help/bitwarden-security-white-paper/).
 
+## Replacing bio auth
+
+Today's bio auth (`suite-app/desktop-app-main/src/modules/bioAuthModule.ts`) asks the OS to verify
+the user, with `systemPreferences.promptTouchID` on macOS and the `WinHello` native binding on
+Windows; Linux is unsupported. A successful prompt only sets a `validated` timestamp in the main
+process, and `BioAuthGuard` hides the UI until it is set. Nothing is encrypted, so it proves "the
+owner is at this computer" and no more.
+
+The passkey replaces it with the same guarantee first, and with real encryption later, behind the
+same toggle and lock screen:
+
+1. **Enroll** when the user turns bio auth on: create the passkey with PRF. If PRF is returned,
+   encrypt a check value with the `PlatformEncryption` service (bound to a bio-auth `context`) and
+   store the method `webauthn-prf`, the credential ID and the ciphertext. Without PRF, store the
+   method `legacy` and keep the current per-OS implementation.
+2. **Unlock** after a restart or a blur/master timeout: the lock screen asks for the passkey with
+   `userVerification: 'required'`. If the ciphertext decrypts, the app unlocks. AES-GCM fails on a
+   wrong key, so no separate comparison is needed.
+3. **Lock**: the blur and master timers call `lock()` on the encryption service, so the key leaves
+   memory together with the UI lock.
+4. **Lost passkey**: the lock screen offers to wipe local data and the bio-auth state. Device-derived
+   data comes back on reconnect and synced labels survive; local-only labels are lost.
+
+At first the check value is the credential ID, which is not secret, so this is a gate equivalent to
+today's. Swapping it for a random storage key that encrypts IndexedDB turns the gate into at-rest
+encryption without changing the flow or the UI.
+
+```
+                      bio auth toggle ON
+                              │
+                  create passkey with PRF
+                    ┌─────────┴─────────┐
+              PRF returned         no PRF (older Windows,
+                    │              Linux without a key)
+      store method: webauthn-prf        │
+      credential ID, encrypted     store method: legacy
+      check value / storage key         │
+                    │                   │
+   ─ ─ ─ ─ ─ ─ ─ ─ ─│─ restart or timeout ─│─ ─ ─ ─ ─ ─ ─ ─ ─
+                    ▼                   ▼
+          lock screen (BioAuthGuard, unchanged)
+                    │                   │
+   passkey with userVerification   promptTouchID (macOS)
+   'required' → PRF → decrypt      WinHello (Windows)
+           ┌────────┴───────┐           │
+       decrypts         fails or        │
+           │          passkey lost      │
+        unlock       → wipe local data  │
+                      and bio-auth state│
+                                     unlock
+```
+
+In the main process the shared parts of the `BioAuth` class stay (validated state, timers, IPC) and
+the passkey becomes one more implementation:
+
+```
+BioAuth (validated state, blur/master timers, IPC, lock screen)
+├── WebAuthnPrfBioAuth   macOS native passkey; Windows/Linux through the iframe
+├── BioAuthMac           legacy: promptTouchID
+├── BioAuthWindows       legacy: WinHello native binding
+└── BioAuthLinux         unsupported
+```
+
+Compared with the current versions:
+
+- One implementation covers macOS, Windows, Linux with a USB key and web.
+- The iframe path runs in the renderer, so its result reaches the main-process state over IPC. That
+  is no weaker than today for a gate. Once the key encrypts data, it stays in the renderer next to
+  the storage, and the main process only tracks locked/unlocked.
+- macOS needs a signed build with the entitlements; the legacy Touch ID gate also works in
+  development builds.
+- Without PRF the legacy implementation stays. Existing users keep their method; enrolling again
+  tries PRF, which picks up a Windows update that adds it.
+
 ## Remaining work
 
 ### 1. Relying party and the shared passkey
