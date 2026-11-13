@@ -25,6 +25,9 @@
         {
             "path": "../../suite/platform-encryption-electron"
         },
+        {
+            "path": "../../suite/platform-encryption-webauthn"
+        },
         { "path": "../../suite/router" },
         { "path": "../../suite/sentry" },
         { "path": "../../suite/tor-desktop" },
@@ -35,6 +38,7 @@
         {
             "path": "../../packages/dependency-injection"
         },
+        { "path": "../../packages/env-utils" },
         { "path": "../../packages/icons" },
         { "path": "../../packages/redux-utils" },
         { "path": "../../packages/suite" },

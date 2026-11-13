@@ -1,5 +1,6 @@
 import { session } from 'electron';
 
+import { WEBAUTHN_FRAME_ORIGIN } from '@suite/desktop-app-api';
 import { isWhitelistedHost } from '@trezor/utils';
 
 import { electronOrigin, localhostDomains } from '../config';
@@ -20,6 +21,7 @@ export const createElectronSessionInterceptor = (): RequestInterceptor => {
     // URLs that should work even in offline mode (e.g., localhost, test servers)
     const offlineModeAllowedUrls = [
         'http://localhost:8000', // Development server (app itself)
+        `${WEBAUTHN_FRAME_ORIGIN}/`, // WebAuthn frame, answered by the app itself
         'file://', // App's own local resources
         'devtools://', // Chrome DevTools
         'chrome-extension://', // Browser extensions

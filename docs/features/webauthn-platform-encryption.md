@@ -1,0 +1,343 @@
+# WebAuthn platform encryption
+
+Status and remaining work for encrypting local data with a key derived from a passkey, on web and
+desktop. The code is on the `feat/desktop-renderer-over-localhost` branch.
+
+## Scope
+
+The passkey is an at-rest encryption layer, not a root of trust. The Trezor stays the root. The
+Suite Sync owner and the delegated identity key are derived from the device, so a lost passkey only
+means reconnecting the Trezor. This mirrors how Bitwarden treats a passkey as an unlock layer rather
+than the master secret.
+
+The purpose is twofold: encrypt local data that is plaintext today, and replace Electron
+`safeStorage`, which is weak (see [Threat model](#threat-model-and-how-it-compares)). Because the
+bulk of the local database is unencrypted now, this is a net improvement, not a regression.
+
+## How it works
+
+A passkey with the WebAuthn [PRF extension](https://w3c.github.io/webauthn/#prf-extension) returns
+the same 32-byte secret every time it is asked with the same input. Suite uses that secret as the
+root of its `PlatformEncryption` service:
+
+1. On the first encryption, Suite creates a passkey and stores its credential ID in `localStorage`.
+2. Suite asks the passkey for its PRF output with a fixed input
+   (`trezor-suite/platform-encryption/v1`). The result is imported as a non-extractable HKDF key and
+   kept in memory for the session, so the passkey prompt appears once per session.
+3. Every message gets its own AES-GCM-256 key, derived from the root key and a random 32-byte salt.
+   The ciphertext is `hex(salt || iv || ciphertext)`.
+
+The same passkey and relying party always produce the same key. A different passkey produces a
+different key, so data encrypted with a lost passkey cannot be decrypted.
+
+## Architecture
+
+The WebAuthn ceremony sits behind one contract, `WebauthnAuthenticator`
+(`suite-common/platform-encryption`), with `createCredential()` and `evaluatePrf()`. The encryption
+(`createWebauthnPlatformEncryption` in `suite/platform-encryption-webauthn`) only depends on that
+contract and on a credential-ID storage. Each composition root picks the implementation:
+
+| Platform              | Implementation                                                               | Why                                                                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Web                   | `createBrowserWebauthnAuthenticator` with `navigator.credentials`            | The browser provides WebAuthn and its UI.                                                                                                 |
+| Desktop macOS         | `createDesktopApiWebauthnAuthenticator` → main process → `electron-webauthn` | Electron's own Touch ID and platform-passkey authenticators ignore PRF. `electron-webauthn` calls Apple's AuthenticationServices instead. |
+| Desktop Windows/Linux | `createFrameWebauthnAuthenticator` → hidden iframe                           | WebAuthn rejects `file:` pages. The iframe runs the browser authenticator at `http://localhost:21345`.                                    |
+
+Details of the desktop iframe path:
+
+- The renderer stays on `file://`, so its storage keeps its origin.
+- The main process answers `http://localhost:21345` itself with `protocol.handle('http', …)`, so no
+  port is opened. Every other `http` request is passed through `net.fetch`.
+- The renderer and the iframe talk over `postMessage`. Creating a credential in a cross-origin frame
+  needs a user activation in that frame, so the renderer first calls `webauthn/activate-frame`, and
+  the main process runs `executeJavaScript('void 0', true)` in the frame.
+
+Every part takes its browser or Electron APIs as dependencies and has unit tests next to it.
+
+## Platform status
+
+| Platform        | Authenticators with PRF                                       | Status                                                    |
+| --------------- | ------------------------------------------------------------- | --------------------------------------------------------- |
+| macOS desktop   | iCloud Keychain passkeys and Touch ID through the native API  | Verified with a personal team and test domain, macOS 26   |
+| macOS desktop   | USB security keys with hmac-secret                            | Not routed: macOS uses the native path only               |
+| Windows desktop | Windows Hello (recent Windows 11), USB security keys          | Not tested                                                |
+| Linux desktop   | USB security keys without PIN                                 | Not tested. Electron has no WebAuthn UI, so PIN keys fail |
+| Web, Chrome     | Google Password Manager, iCloud Keychain, Windows Hello, keys | Debug panel only, relying party is the page hostname      |
+| Web, Safari 18+ | iCloud Keychain passkeys                                      | Not tested                                                |
+| Web, Firefox    | Depends on version and authenticator                          | Not tested                                                |
+
+## Threat model and how it compares
+
+**What it protects.** Data at rest. A stolen disk or a lost, powered-off machine yields only
+ciphertext, because the passkey secret is not on the disk. That is the whole point.
+
+**What it does not protect.** A live session against local malware running as the user. Such malware
+can call WebAuthn itself with the public relying party, credential ID and fixed PRF input, show the
+user a lure, and derive the same root key from a single approval. It can also scrape the in-memory
+key while the session is unlocked. No local key store defeats this, and it is out of scope here, as
+it is for every OS keychain and for Bitwarden.
+
+**Why it still beats the status quo.** Today the bulk of the local database is plaintext, and the two
+encrypted secrets use `safeStorage`, which is weak at exactly this:
+
+- On Windows `safeStorage` is DPAPI, user-scoped. Any process running as the same user decrypts it
+  silently, with no prompt. This is the standard infostealer path.
+- On Linux without a keyring it falls back to `basic_text`, which is essentially plaintext.
+
+The passkey moves a Windows attacker from "silent background decrypt" to "must socially engineer an
+approval", and with `userVerification: 'required'` to "must pass a PIN or biometric". That is a large
+increase in cost. Setting `userVerification: 'required'` on the unlock path is the single most
+valuable knob in this design.
+
+**Who may request the passkey, per platform.** This is where the platforms differ most:
+
+- **macOS: strong.** The OS only lets apps listed in the domain's `apple-app-site-association` file
+  use its passkeys, so another local app cannot request Suite's passkey even if it hardcodes the
+  relying party.
+- **Windows: weak.** Any local app can request a Windows Hello passkey for any relying party; the
+  user's approval at the prompt is the only gate. `webauthn.dll` knows and can show the caller, but
+  SpecterOps' Pass-the-Passkey research (Black Hat 2026) showed that the shown caller identity is
+  spoofable, and Microsoft rated it a low-severity defense-in-depth issue.
+- **Linux: none at the OS level.** Only a real browser verifies, through the TLS origin, and only for
+  web pages. There is no app-to-domain mechanism.
+- **Browsers:** a page may only claim its own domain, anchored in TLS. A cross-site-scripting hole on
+  the domain is the exposure.
+
+**Does MSIX/AppX packaging fix Windows?** No. It gives the app a signed package identity and lets it
+register as a passkey provider plugin (Windows 11 24H2 WebAuthn Plugin APIs), but it provides no
+`apple-app-site-association` equivalent that binds the app to a relying party. Windows' only
+well-known file here, `/.well-known/webauthn` related origins, authorizes extra web origins, not
+native apps. The caller identity MSIX surfaces is the spoofable one above.
+
+**How Bitwarden does the same thing.** Its "log in with passkey (PRF)" uses the identical mechanism:
+a 32-byte PRF output plus a salt rebuilds a key that unwraps a chain ending at the vault key. Its
+desktop app bridges WebAuthn through an `https` iframe from its own domain, the same technique as
+this branch, because Electron `file://` cannot do WebAuthn. Two lessons it confirms: the passkey is
+an unlock layer, not the master (without PRF the master password still decrypts), and a compromised
+endpoint is scoped out rather than defended.
+
+References: [Pass-the-Passkey (SpecterOps)](https://specterops.io/wp-content/uploads/sites/3/2026/08/Pass-the-Passkey_A4_v2.pdf),
+[Related origins (passkeys.dev)](https://passkeys.dev/docs/advanced/related-origins/),
+[Passkeys for Windows apps (Microsoft)](https://learn.microsoft.com/en-us/windows/apps/develop/security/use-cases),
+[Bitwarden security whitepaper](https://bitwarden.com/help/bitwarden-security-white-paper/).
+
+## Replacing bio auth
+
+Today's bio auth (`suite-app/desktop-app-main/src/modules/bioAuthModule.ts`) asks the OS to verify
+the user, with `systemPreferences.promptTouchID` on macOS and the `WinHello` native binding on
+Windows; Linux is unsupported. A successful prompt only sets a `validated` timestamp in the main
+process, and `BioAuthGuard` hides the UI until it is set. Nothing is encrypted, so it proves "the
+owner is at this computer" and no more.
+
+The passkey replaces it with the same guarantee first, and with real encryption later, behind the
+same toggle and lock screen:
+
+1. **Enroll** when the user turns bio auth on: create the passkey with PRF. If PRF is returned,
+   encrypt a check value with the `PlatformEncryption` service (bound to a bio-auth `context`) and
+   store the method `webauthn-prf`, the credential ID and the ciphertext. Without PRF, store the
+   method `legacy` and keep the current per-OS implementation.
+2. **Unlock** after a restart or a blur/master timeout: the lock screen asks for the passkey with
+   `userVerification: 'required'`. If the ciphertext decrypts, the app unlocks. AES-GCM fails on a
+   wrong key, so no separate comparison is needed.
+3. **Lock**: the blur and master timers call `lock()` on the encryption service, so the key leaves
+   memory together with the UI lock.
+4. **Lost passkey**: the lock screen offers to wipe local data and the bio-auth state. Device-derived
+   data comes back on reconnect and synced labels survive; local-only labels are lost.
+
+At first the check value is the credential ID, which is not secret, so this is a gate equivalent to
+today's. Swapping it for a random storage key that encrypts IndexedDB turns the gate into at-rest
+encryption without changing the flow or the UI.
+
+```
+                      bio auth toggle ON
+                              │
+                  create passkey with PRF
+                    ┌─────────┴─────────┐
+              PRF returned         no PRF (older Windows,
+                    │              Linux without a key)
+      store method: webauthn-prf        │
+      credential ID, encrypted     store method: legacy
+      check value / storage key         │
+                    │                   │
+   ─ ─ ─ ─ ─ ─ ─ ─ ─│─ restart or timeout ─│─ ─ ─ ─ ─ ─ ─ ─ ─
+                    ▼                   ▼
+          lock screen (BioAuthGuard, unchanged)
+                    │                   │
+   passkey with userVerification   promptTouchID (macOS)
+   'required' → PRF → decrypt      WinHello (Windows)
+           ┌────────┴───────┐           │
+       decrypts         fails or        │
+           │          passkey lost      │
+        unlock       → wipe local data  │
+                      and bio-auth state│
+                                     unlock
+```
+
+In the main process the shared parts of the `BioAuth` class stay (validated state, timers, IPC) and
+the passkey becomes one more implementation:
+
+```
+BioAuth (validated state, blur/master timers, IPC, lock screen)
+├── WebAuthnPrfBioAuth   macOS native passkey; Windows/Linux through the iframe
+├── BioAuthMac           legacy: promptTouchID
+├── BioAuthWindows       legacy: WinHello native binding
+└── BioAuthLinux         unsupported
+```
+
+Compared with the current versions:
+
+- One implementation covers macOS, Windows, Linux with a USB key and web.
+- The iframe path runs in the renderer, so its result reaches the main-process state over IPC. That
+  is no weaker than today for a gate. Once the key encrypts data, it stays in the renderer next to
+  the storage, and the main process only tracks locked/unlocked.
+- macOS needs a signed build with the entitlements; the legacy Touch ID gate also works in
+  development builds.
+- Without PRF the legacy implementation stays. Existing users keep their method; enrolling again
+  tries PRF, which picks up a Windows update that adds it.
+
+## Remaining work
+
+### 1. Relying party and the shared passkey
+
+- [ ] Decide the relying party ID. One domain for web and desktop means one synced passkey and one
+      key on every device that holds the passkey. Prefer `suite.trezor.io` over `trezor.io`: a
+      passkey for `trezor.io` can be requested by a page on any `trezor.io` subdomain, while
+      `suite.trezor.io` limits that to the web app's own origin.
+- [ ] Windows and Linux desktop cannot share that passkey today: the iframe runs at
+      `http://localhost:21345`, so its passkeys belong to the relying party `localhost`. Sharing
+      would need the frame served at an `https://` origin under the chosen domain from a dedicated
+      session partition, which is unverified on Windows.
+- [ ] Web: pass the relying party from configuration instead of `window.location.hostname`. Keep the
+      hostname for local development, where `localhost` cannot use `trezor.io`.
+- [ ] Desktop: `webauthnRelyingPartyId` in `suite-app/desktop-app-main/src/config.ts` is already
+      `trezor.io`.
+- [ ] The native macOS API reports `origin: "https://<rpId>"` in `clientDataJSON`. Nothing verifies
+      assertions on a server today, so this only matters if that changes.
+
+### 2. Apple setup for macOS production builds
+
+All of these are needed together, or macOS refuses the passkey request with "not associated with
+domain".
+
+- [ ] Enable the Associated Domains capability on the App ID `io.trezor.TrezorSuite` in team
+      `C3P22XVH2C`.
+- [ ] Create a Developer ID provisioning profile for that App ID and store it as a secret of the
+      release workflow (`release-suite-desktop-web-staging.yml`).
+- [ ] Embed the profile in codesign builds with `mac.sign.provisioningProfile` in
+      `suite-app/desktop-app/electron-builder-config.js`.
+- [ ] Add to `entitlements.mac.webauthn.plist`:
+    - `com.apple.application-identifier` = `C3P22XVH2C.io.trezor.TrezorSuite`
+    - `com.apple.developer.team-identifier` = `C3P22XVH2C`
+    - `com.apple.developer.associated-domains` = `webcredentials:trezor.io`
+- [ ] The plist already lists `keychain-access-groups` for the Touch ID authenticator. Restricted
+      entitlements without an embedded profile make macOS kill the app at launch. Either keep them
+      together with the profile, or drop `app.configureWebAuthn({ touchID })` and the keychain group,
+      since the native path does not need them.
+- [ ] Serve `https://trezor.io/.well-known/apple-app-site-association` with content type
+      `application/json`:
+
+    ```json
+    { "webcredentials": { "apps": ["C3P22XVH2C.io.trezor.TrezorSuite"] } }
+    ```
+
+    Apple fetches it through its CDN, which can take time to pick up changes.
+
+- [ ] Ad hoc signed CI builds (`build-desktop-apps.yml`) cannot use passkeys. Testing needs a build
+      signed with a team certificate and profile.
+
+For local development with a personal team: add `?mode=developer` to the associated domain, add
+`com.apple.security.get-task-allow`, run `sudo swcutil developer-mode -e true`, and install the app
+in `/Applications`. Without `get-task-allow`, macOS ignored the app's associated domains completely.
+
+### 3. The `electron-webauthn` dependency
+
+- [ ] Security review. It is a young, single-maintainer package that loads native code through the
+      prebuilt `objc-js` N-API binary, and its `@oslojs/*` dependencies are marked deprecated on npm.
+      Options: accept it pinned, fork it under the Trezor organization, or replace it with an own
+      binding in `suite/desktop-app-native-bindings`.
+- [ ] Verify the packaged app on both macOS architectures: `objc-js` ships prebuilds for arm64 and
+      x64, and `asar.unpack` must keep them loadable.
+- [ ] macOS 15 or later is required for PRF. Decide what older macOS versions get.
+
+### 4. Windows and Linux
+
+- [ ] Test the iframe path on Windows with Windows Hello and with a USB security key, and record
+      which Windows builds return PRF.
+- [ ] Test Linux with a USB security key.
+- [ ] Review the global `http` handler. Electron cannot take over a single origin, so every plain
+      `http` request from the renderer goes through `net.fetch` in the main process. Check Trezor
+      Bridge, CoinJoin, Tor and the development server. Failed pass-through requests already become
+      network errors instead of unhandled rejections.
+
+### 5. Missing PRF, fallback and migration
+
+- [ ] Decide the behaviour when no authenticator returns PRF (Linux without a key, older macOS,
+      Windows without PRF, browsers without PRF). Options: Electron `safeStorage` on desktop, no
+      encryption feature, or a key from the Trezor (SLIP-11 `CipherKeyValue`).
+- [ ] Before this branch, desktop encrypted with `safeStorage`. Data already encrypted that way, such
+      as the Suite Sync owner and delegated identity keys, needs a migration: decrypt with
+      `safeStorage`, encrypt again with the passkey key.
+- [x] The ciphertext starts with a format version byte and is bound to a `context` string
+      (record type and id) as AES-GCM additional data, so blobs cannot be swapped between records.
+
+Extending from the two current secrets to the whole local database adds three decisions, because a
+lost passkey loses its ciphertext for good:
+
+- [ ] Encrypt only stores that can be re-synced or re-derived. Device-derived values are safe to
+      lose. Local-only data (un-synced labels, local settings) would be gone if the authenticator is
+      lost, so either leave it out or give it a fallback.
+- [ ] Decide what app launch does when the unlock prompt is declined, since the DB cannot be read
+      until the passkey answers. The `EncryptionLocked` result is the signal to branch on.
+- [ ] Make whole-database encryption opt-in and keep `safeStorage` as the desktop fallback for
+      environments with no PRF, rather than dropping it. It is the weaker store, but it must not
+      lock out users who cannot get a passkey PRF.
+
+### 6. Losing the passkey or the credential ID
+
+- [ ] The credential ID lives in `localStorage`. If it is cleared, the passkey still exists but Suite
+      does not know which one to ask. Passkeys are now created with `residentKey: 'preferred'` on
+      every path; a recovery request without `allowCredentials`, so the user can pick the passkey
+      again, is not implemented.
+- [ ] If the passkey itself is deleted, the data is lost. Only encrypt data that can be recreated,
+      or document this for users.
+
+### 7. Security properties and decisions
+
+See [Threat model](#threat-model-and-how-it-compares) for the attacker model and the per-platform
+comparison. In the code:
+
+- [ ] The passkey proves possession, not identity: requests use `userVerification: 'preferred'`
+      (native macOS) and `'discouraged'` (web, iframe). Set `'required'` on the unlock path. Against
+      `safeStorage` on Windows this is the biggest single improvement, because it denies malware the
+      silent-decrypt and stray-touch shortcuts.
+- The root key stays in memory until `lock()` on the encryption service is called. Nothing calls it
+  yet; a bio-auth replacement must wire it to the blur and master timers.
+- After a refused or failed prompt no new prompt is shown for five seconds; callers get
+  `EncryptionLocked` and must keep stored data. Consumers of the Suite Sync owner and the delegated
+  identity key do.
+- Only the app's own top frame may load the WebAuthn frame; the request filter cancels it for any
+  other embedder.
+
+### 8. User experience
+
+- [ ] First setup asks twice: the native macOS API returned no PRF output at creation, so a second
+      request reads it. Check whether evaluating PRF during creation works on newer systems.
+- [ ] Replace the debug-panel flow with user-facing prompts, copy and translations, and handle
+      cancellation and time-outs.
+- [ ] Keep credential IDs and PRF outputs out of logs, analytics and Sentry.
+
+### 9. Verification and review
+
+- [ ] Run the unit tests. They are written but were not run:
+
+    ```
+    yarn workspace @suite/platform-encryption-webauthn test:unit --coverage=0
+    yarn workspace @suite/platform-encryption-electron test:unit --coverage=0
+    yarn workspace @suite-app/desktop-app-main test:unit --coverage=0 src/libs/native-webauthn-authenticator.test.ts src/libs/webauthn-frame.test.ts src/libs/webauthn-ipc.test.ts
+    ```
+
+- [ ] Add E2E coverage with a virtual authenticator. Playwright can add one through the Chrome
+      DevTools Protocol (`WebAuthn.addVirtualAuthenticator` with `hasPrf: true`) for web and for the
+      Electron iframe path. The native macOS path cannot be driven this way and needs manual testing.
+- [ ] Run the package typechecks and the CI gates on the final branch.
+- [ ] Update the pull request description, which still describes the first, local-server approach.

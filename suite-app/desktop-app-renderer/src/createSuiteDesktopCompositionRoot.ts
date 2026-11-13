@@ -1,7 +1,14 @@
 import { createMemoryHistory } from 'history';
 
+import { WEBAUTHN_FRAME_ORIGIN } from '@suite/desktop-app-api';
 import { createElectronDesktopApi } from '@suite/desktop-app-api-electron';
-import { createElectronPlatformEncryption } from '@suite/platform-encryption-electron';
+import { createDesktopApiWebauthnAuthenticator } from '@suite/platform-encryption-electron';
+import {
+    createFrameWebauthnAuthenticator,
+    createIframeWebauthnDeps,
+    createStorageCredentialIdStorage,
+    createWebauthnPlatformEncryption,
+} from '@suite/platform-encryption-webauthn';
 import {
     createHydrateReduxStore,
     createReduxStore,
@@ -11,6 +18,7 @@ import {
 } from '@suite-app/app';
 import TrezorConnect from '@trezor/connect-electron';
 import { toGetter } from '@trezor/dependency-injection';
+import { isMacOs } from '@trezor/env-utils';
 import { createDb, createPreloadStore } from '@trezor/suite';
 
 import { type DesktopApp, createDesktopApp } from './createDesktopApp';
@@ -20,7 +28,20 @@ type SuiteDesktopCompositionRoot = { app: DesktopApp };
 export const createSuiteDesktopCompositionRoot = (): SuiteDesktopCompositionRoot => {
     const desktopApi = createElectronDesktopApi();
     const history = createMemoryHistory();
-    const platformEncryption = createElectronPlatformEncryption({ desktopApi });
+    // Electron's own macOS authenticators ignore PRF, so macOS uses the system passkey API.
+    const webauthnAuthenticator = isMacOs()
+        ? createDesktopApiWebauthnAuthenticator({ desktopApi })
+        : createFrameWebauthnAuthenticator(
+              createIframeWebauthnDeps({
+                  frameOrigin: WEBAUTHN_FRAME_ORIGIN,
+                  activateFrame: desktopApi.webauthnActivateFrame,
+              }),
+          );
+    const platformEncryption = createWebauthnPlatformEncryption({
+        webauthnAuthenticator,
+        credentialIdStorage: createStorageCredentialIdStorage({ storage: window.localStorage }),
+        now: Date.now,
+    });
     const reloadApp = desktopApi.appRestart;
 
     // The desktop renderer can't construct node-only transports (`usb`/`dgram`), so each factory
@@ -59,7 +80,7 @@ export const createSuiteDesktopCompositionRoot = (): SuiteDesktopCompositionRoot
         preloadStore,
         getStatePatch: async () => (await desktopApi.handshake()).statePatch,
     });
-    const services = { ...suiteServices, store, hydrateReduxStore };
+    const services = { ...suiteServices, store, hydrateReduxStore, webauthnAuthenticator };
     // Services need the store's dispatch/getState, while Redux thunks need those services in extra.
     // Inject them after construction to break the cycle, before the app can dispatch any actions.
     injectServicesIntoReduxExtra(services);

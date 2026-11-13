@@ -21,6 +21,10 @@ export const localhostDomains = ['localhost', '127.0.0.1'];
 
 export const electronOrigin = 'https://electron.trezor.io';
 
+// The passkey domain: its apple-app-site-association file must list this app.
+export const webauthnRelyingPartyId = 'trezor.io';
+
+
 export const allowedDomains = [
     ...localhostDomains,
     'trezor.io',

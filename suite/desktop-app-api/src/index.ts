@@ -21,6 +21,6 @@ export type {
     InAppBrowserHostEvent,
     InAppBrowserOpenPayload,
 } from './messages';
-export { inAppBrowserBounds, inAppBrowserOpenPayload } from './messages';
+export { inAppBrowserBounds, inAppBrowserOpenPayload, WEBAUTHN_FRAME_ORIGIN } from './messages';
 
 export { type DesktopApiDep, injectDesktopApi } from './desktopApiDependency';
