@@ -2,7 +2,6 @@ import '@suite-common/test-utils/globalOverrides';
 
 import { screen } from '@testing-library/react';
 
-import { initialState as selectedAccountInitialState } from '@suite/account';
 import { messages } from '@suite/intl';
 import { mockStakingState } from '@suite-common/earn-staking/mocks';
 import { stakingAmountSchema } from '@suite-common/earn-staking-common';
@@ -11,7 +10,7 @@ import { mockNetworkIcon, mockNetworksState } from '@suite-common/networks/mocks
 import { mockSuiteDevice } from '@suite-common/suite-types/mocks';
 import { createTestCompositionRoot } from '@suite-common/test-utils';
 import { type TokenAddress } from '@suite-common/tokens';
-import { asNetworkSymbol } from '@suite-common/wallet-config';
+import { asNetworkSymbol, getNetwork } from '@suite-common/wallet-config';
 import { type Account, type CurrentRate, asAccountDescriptor } from '@suite-common/wallet-types';
 import { mockAccountToken, mockWalletAccount } from '@suite-common/wallet-types/mocks';
 import { getFiatRateKey } from '@suite-common/wallet-utils';
@@ -106,7 +105,12 @@ const getState = (
     },
     wallet: {
         ...mockInitialAppState.wallet,
-        selectedAccount: selectedAccountInitialState,
+        selectedAccount: {
+            status: 'loaded',
+            account: ethAccount,
+            network: getNetwork(ETH),
+            params: undefined,
+        },
         accounts,
         settings: {
             ...mockInitialAppState.wallet.settings,

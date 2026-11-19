@@ -6,13 +6,8 @@ import {
     HOME_ASSET_ROW_LIMIT,
     getHomeAssetRowLimit,
     selectAreHomeAssetSmallBalancesDisplayed,
-    selectDisplayedWalletAssetKeys,
-    selectHasShownWalletAssets,
-    selectIsHomeAssetTableFoldable,
-    selectSmallBalanceSummary,
 } from '@suite-common/assets';
 import { setAreHomeAssetSmallBalancesShown } from '@suite-common/wallet-core';
-import { type AccountKey } from '@suite-common/wallet-types';
 import { Card, Table } from '@trezor/components';
 import { useServices } from '@trezor/dependency-injection';
 import { injectDispatch } from '@trezor/redux-utils';
@@ -27,28 +22,25 @@ import {
 } from '#src/views/home/HomeAssetsTable/homeAssetTableLayout';
 
 import { AccountAssetRowContainer } from './AccountAssetRowContainer';
-
-type AccountAssetTableProps = {
-    accountKeys: readonly AccountKey[];
-};
+import { accountAssetTable } from './selectedAccountAssetTable';
 
 /**
  * The Home asset table for one account: its coin, its stake counted in, and its tokens. The
  * small-balance switch is the one Home keeps; there is no grouping, as every row is the
  * account's network.
  */
-export const AccountAssetTable = ({ accountKeys }: AccountAssetTableProps) => {
+export const AccountAssetTable = () => {
     const { dispatch } = useServices(injectDispatch);
     const [isExpanded, setIsExpanded] = useState(false);
-    const hasAssets = useSelector(state => selectHasShownWalletAssets(state, accountKeys));
-    const smallBalances = useSelector(state => selectSmallBalanceSummary(state, accountKeys));
+    const hasAssets = useSelector(accountAssetTable.selectHasShownWalletAssets);
+    const smallBalances = useSelector(accountAssetTable.selectSmallBalanceSummary);
     const areSmallBalancesShown = useSelector(selectAreHomeAssetSmallBalancesDisplayed);
     const isFoldable = useSelector(state =>
-        selectIsHomeAssetTableFoldable(state, HOME_ASSET_ROW_LIMIT, accountKeys),
+        accountAssetTable.selectIsHomeAssetTableFoldable(state, HOME_ASSET_ROW_LIMIT),
     );
     const rowLimit = getHomeAssetRowLimit({ isFoldable, isExpanded });
     const assetKeys = useSelector(state =>
-        selectDisplayedWalletAssetKeys(state, rowLimit, accountKeys),
+        accountAssetTable.selectDisplayedWalletAssetKeys(state, rowLimit),
     );
 
     const changeSmallBalances = (areShown: boolean) => {
@@ -93,11 +85,7 @@ export const AccountAssetTable = ({ accountKeys }: AccountAssetTableProps) => {
                         />
                     )}
                     {assetKeys.map(assetKey => (
-                        <AccountAssetRowContainer
-                            key={assetKey}
-                            accountKeys={accountKeys}
-                            assetKey={assetKey}
-                        />
+                        <AccountAssetRowContainer key={assetKey} assetKey={assetKey} />
                     ))}
                     {isFoldable && (
                         <HomeAssetExpandRow

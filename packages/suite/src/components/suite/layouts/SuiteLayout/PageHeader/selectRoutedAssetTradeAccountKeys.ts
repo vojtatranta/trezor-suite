@@ -1,5 +1,5 @@
 import { type DebugRootState, selectIsDebugModeActive } from '@suite/debug';
-import { type AssetAccount, selectDeviceAssetAccounts } from '@suite-common/assets';
+import { type AssetAccount, selectDeviceAssetAccountsOfAsset } from '@suite-common/assets';
 import { selectDeviceStaticSessionId } from '@suite-common/device';
 import { selectSupportedNetworkSymbols } from '@suite-common/networks';
 import {
@@ -33,28 +33,24 @@ const createMemoizedSelector = createWeakMapSelector.withTypes<RoutedAssetTradeS
 
 export const selectRoutedAssetTradeAccountKeys = createMemoizedSelector(
     [
-        selectDeviceAssetAccounts,
+        (state: RoutedAssetTradeState) =>
+            selectDeviceAssetAccountsOfAsset(state, selectRoutedAssetKey(state)),
         selectAccounts,
         selectVisibleDeviceAccountsMap,
         selectSupportedNetworkSymbols,
         selectDeviceStaticSessionId,
         selectIsDebugModeActive,
         selectTokenDefinitions,
-        selectRoutedAssetKey,
     ],
     (
-        assetAccounts,
+        routedAssetAccounts,
         accounts,
         accountsByKey,
         supportedNetworks,
         deviceState,
         isDebug,
         tokenDefinitions,
-        assetKey,
     ): RoutedAssetTradeAccountKeys => {
-        const routedAssetAccounts = assetAccounts.filter(
-            assetAccount => assetAccount.assetKey === assetKey,
-        );
         const networkSymbol = routedAssetAccounts[0]?.networkSymbol;
 
         const [buyAccount] =

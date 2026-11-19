@@ -1,12 +1,5 @@
 import { Translation } from '@suite/intl';
 import { selectShouldAnimateLoadingSkeleton } from '@suite/ui-animations';
-import {
-    selectHomeAssetTotals,
-    selectIsAssetTableRatePending,
-    selectIsAssetTableTotalIncomplete,
-    selectShownWalletAssetKeys,
-} from '@suite-common/assets';
-import { type AccountKey } from '@suite-common/wallet-types';
 import { Box, Card, Column, Row, Skeleton, Text } from '@trezor/components';
 
 import { NoRatesTooltip } from '#src/components/suite/Ticker/NoRatesTooltip';
@@ -14,21 +7,19 @@ import { useSelector } from '#src/hooks/suite';
 import { useAccountHeaderContext } from '#src/support/suite/AccountHeaderProvider';
 import { HomeTotalBalance } from '#src/views/home/HomeBalance/HomeTotalBalance';
 
+import { accountAssetTable } from './selectedAccountAssetTable';
+
 /** The line height of the total headline, so its placeholders keep the card from jumping. */
 const TOTAL_HEIGHT = 56;
 
-type AccountAssetBalanceProps = {
-    accountKeys: readonly AccountKey[];
-};
-
 /** What the account is worth in total, and how many assets make it up. */
-export const AccountAssetBalance = ({ accountKeys }: AccountAssetBalanceProps) => {
-    const assetCount = useSelector(state => selectShownWalletAssetKeys(state, accountKeys).length);
-    const { fiatValue } = useSelector(state => selectHomeAssetTotals(state, accountKeys));
-    const isIncomplete = useSelector(state =>
-        selectIsAssetTableTotalIncomplete(state, accountKeys),
+export const AccountAssetBalance = () => {
+    const assetCount = useSelector(
+        state => accountAssetTable.selectShownWalletAssetKeys(state).length,
     );
-    const isRatePending = useSelector(state => selectIsAssetTableRatePending(state, accountKeys));
+    const { fiatValue } = useSelector(accountAssetTable.selectHomeAssetTotals);
+    const isIncomplete = useSelector(accountAssetTable.selectIsAssetTableTotalIncomplete);
+    const isRatePending = useSelector(accountAssetTable.selectIsAssetTableRatePending);
     const shouldAnimateSkeleton = useSelector(selectShouldAnimateLoadingSkeleton);
     const { balanceSectionRef } = useAccountHeaderContext();
 

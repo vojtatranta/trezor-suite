@@ -1,13 +1,13 @@
 import { shallowEqual } from 'react-redux';
 
 import { selectIsStakingAccountActive } from '@suite-common/earn-staking';
-import { type WalletAssetKey, selectAccounts } from '@suite-common/wallet-core';
+import { selectAccounts } from '@suite-common/wallet-core';
 import { type Account } from '@suite-common/wallet-types';
 import { hasAccountOrTokenSpendableBalance } from '@suite-common/wallet-utils';
 import { createWeakMapSelector, returnStableArrayIfEmpty } from '@trezor/redux-utils';
 import { BigNumber } from '@trezor/utils';
 
-import { selectDeviceAssetAccounts } from './assetAccountsSelectors';
+import { selectDeviceAssetAccountsOfAsset } from './assetAccountsSelectors';
 import {
     type HomeAssetTableState,
     selectWalletAssetContractAddress,
@@ -18,17 +18,9 @@ const createMemoizedSelector = createWeakMapSelector.withTypes<HomeAssetTableSta
 const selectState = (state: HomeAssetTableState) => state;
 
 export const selectWalletAssetAccounts = createMemoizedSelector(
-    [
-        selectDeviceAssetAccounts,
-        selectAccounts,
-        (_state: HomeAssetTableState, assetKey: WalletAssetKey | undefined) => assetKey,
-    ],
-    (assetAccounts, accounts, assetKey): readonly Account[] => {
-        const accountKeys = new Set(
-            assetAccounts
-                .filter(assetAccount => assetAccount.assetKey === assetKey)
-                .map(assetAccount => assetAccount.accountKey),
-        );
+    [selectDeviceAssetAccountsOfAsset, selectAccounts],
+    (assetAccounts, accounts): readonly Account[] => {
+        const accountKeys = new Set(assetAccounts.map(assetAccount => assetAccount.accountKey));
 
         return returnStableArrayIfEmpty(accounts.filter(account => accountKeys.has(account.key)));
     },
