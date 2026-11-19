@@ -56,11 +56,11 @@ import { BigNumber } from '@trezor/utils';
 
 import {
     type AssetAccount,
-    type AssetAccountsIndex,
     type AssetAccountsRootState,
     type HiddenTokenReason,
-    createAssetAccountsIndex,
-    deviceAssetAccountsIndex,
+    type HoldingsIndex,
+    createHoldingsIndex,
+    deviceHoldingsIndex,
     selectDeviceAssetAccountsOfAsset,
 } from './assetAccountsSelectors';
 
@@ -92,7 +92,6 @@ type WalletAsset = {
     networkSymbol: NetworkSymbol;
     contractAddress: TokenAddress | undefined;
     cryptoBalance: BigNumber;
-    amount: string;
     tokenSymbol: TokenSymbol | null;
     tokenDecimals: number | undefined;
     accountCount: number;
@@ -117,7 +116,6 @@ const addAssetAccount = (
         networkSymbol,
         contractAddress,
         cryptoBalance: total,
-        amount: total.toFixed(),
         tokenSymbol:
             asset?.tokenSymbol ??
             (tokenInfo?.symbol === undefined ? null : toTokenSymbol(tokenInfo.symbol)),
@@ -132,37 +130,10 @@ type RateEntry = { key: string; rate: number | undefined; usdRate: number | unde
 const toRateKey = (networkSymbol: NetworkSymbol, contractAddress: TokenAddress | undefined) =>
     contractAddress === undefined ? networkSymbol : `${networkSymbol}-${contractAddress}`;
 
-type FiatRates = Readonly<Record<string, { rate?: number; usdRate?: number } | undefined>>;
+type HeldAsset = Pick<WalletAsset, 'networkSymbol' | 'contractAddress'>;
 
-const toRateEntries = (
-    rates: FiatRates | undefined,
-    baseCurrency: ReturnType<typeof selectBaseCurrency>,
-): RateEntry[] => {
-    const suffix = `-${baseCurrency}`;
-
-    return Object.entries(rates ?? {})
-        .filter(([key]) => key.endsWith(suffix))
-        .map(([key, entry]) => ({
-            key: key.slice(0, -suffix.length),
-            rate: entry?.rate,
-            usdRate: entry?.usdRate,
-        }));
-};
-
-const createRatesIndex = (
-    name: string,
-    selectRates: (state: HomeAssetTableState) => FiatRates | undefined,
-) =>
-    createIndex({
-        name,
-        source: createMemoizedSelector([selectRates, selectBaseCurrency], toRateEntries),
-        getId: (entry: RateEntry) => entry.key,
-    });
-
-const ratesJoin = {
-    rate: createRatesIndex('currentRates', selectCurrentFiatRates),
-    weekAgoRate: createRatesIndex('lastWeekRates', selectLastWeekFiatRates),
-};
+const haveSameHeldAssets = (left: readonly HeldAsset[], right: readonly HeldAsset[]) =>
+    left.length === right.length && left.every((asset, index) => shallowEqual(asset, right[index]));
 
 const joinRates = ({ networkSymbol, contractAddress }: WalletAsset) => {
     const rateKey = toRateKey(networkSymbol, contractAddress);
@@ -185,12 +156,16 @@ const toPricedAsset = (
     asset: WalletAsset,
     rate: RateEntry | undefined,
     weekAgoRate: RateEntry | undefined,
-): PricedAsset => ({
-    ...asset,
-    fiatValue: price(asset.amount, rate),
-    weekAgoFiatValue: price(asset.amount, weekAgoRate),
-    usdToBaseCurrencyRate: rate?.rate && rate.usdRate ? rate.rate / rate.usdRate : undefined,
-});
+): PricedAsset => {
+    const amount = asset.cryptoBalance.toFixed();
+
+    return {
+        ...asset,
+        fiatValue: price(amount, rate),
+        weekAgoFiatValue: price(amount, weekAgoRate),
+        usdToBaseCurrencyRate: rate?.rate && rate.usdRate ? rate.rate / rate.usdRate : undefined,
+    };
+};
 
 const byValue = (left: PricedAsset, right: PricedAsset) => {
     const isPriced = (asset: PricedAsset) => asset.fiatValue !== undefined;
@@ -276,25 +251,17 @@ const getAccountStakingAmount = (state: HomeAssetTableState, account: Account) =
 type AssetTableScope<TState extends HomeAssetTableState> = {
     name: string;
     selectAccounts: (state: TState) => readonly Account[];
-    assetAccountsIndex?: AssetAccountsIndex<TState>;
+    holdingsIndex?: HoldingsIndex<TState>;
     isKeptToAllowedNetworks?: boolean;
 };
 
 export const createAssetTableSelectors = <TState extends HomeAssetTableState>({
     name,
     selectAccounts,
-    assetAccountsIndex = createAssetAccountsIndex(`${name}AssetAccounts`, selectAccounts),
+    holdingsIndex = createHoldingsIndex(`${name}Holdings`, selectAccounts),
     isKeptToAllowedNetworks = true,
 }: AssetTableScope<TState>) => {
     const createScopedSelector = createWeakMapSelector.withTypes<TState>();
-
-    const selectPartitionedAssetAccounts = createScopedSelector(
-        [assetAccountsIndex.getEntities],
-        assetAccounts => ({
-            shown: assetAccounts.filter(({ hiddenReason }) => hiddenReason === undefined),
-            hidden: assetAccounts.filter(({ hiddenReason }) => hiddenReason !== undefined),
-        }),
-    );
 
     const createAssetsIndexes = (
         part: 'shown' | 'hidden',
@@ -302,20 +269,58 @@ export const createAssetTableSelectors = <TState extends HomeAssetTableState>({
     ) => {
         const assets = createAggregateIndex({
             name: `${name}${part}Assets`,
-            source: createIndex({
-                name: `${name}${part}AssetAccounts`,
-                source: (state: TState) => selectPartitionedAssetAccounts(state)[part],
-                getId: (assetAccount: AssetAccount) => assetAccount.assetAccountKey,
-            }),
-            expand: (assetAccount: AssetAccount) => [assetAccount],
+            source: holdingsIndex,
+            expand: (holdings: readonly AssetAccount[]) =>
+                holdings.filter(
+                    ({ hiddenReason }) => (hiddenReason === undefined) === (part === 'shown'),
+                ),
             getId: (assetAccount: AssetAccount) => assetAccount.assetKey,
             reduce: addAssetAccount,
             isEqual: haveSameValues,
         });
+        const selectHeldAssets = createScopedSelector(
+            [assets.getEntities],
+            (held): HeldAsset[] =>
+                held.map(({ networkSymbol, contractAddress }) => ({
+                    networkSymbol,
+                    contractAddress,
+                })),
+            { memoizeOptions: { resultEqualityCheck: haveSameHeldAssets } },
+        );
+
+        const createRatesIndex = (
+            kind: string,
+            selectRates: (
+                state: TState,
+            ) => Readonly<Record<string, Partial<RateEntry> | undefined>> | undefined,
+        ) =>
+            createIndex({
+                name: `${name}${part}${kind}Rates`,
+                source: createScopedSelector(
+                    [selectHeldAssets, selectRates, selectBaseCurrency],
+                    (held, rates, baseCurrency): RateEntry[] =>
+                        held.map(({ networkSymbol, contractAddress }) => {
+                            const entry =
+                                rates?.[
+                                    getFiatRateKey(networkSymbol, baseCurrency, contractAddress)
+                                ];
+
+                            return {
+                                key: toRateKey(networkSymbol, contractAddress),
+                                rate: entry?.rate,
+                                usdRate: entry?.usdRate,
+                            };
+                        }),
+                ),
+                getId: (entry: RateEntry) => entry.key,
+            });
         const priced = createDerivedIndex({
             name: `${name}${part}PricedAssets`,
             source: assets,
-            join: ratesJoin,
+            join: {
+                rate: createRatesIndex('Current', selectCurrentFiatRates),
+                weekAgoRate: createRatesIndex('LastWeek', selectLastWeekFiatRates),
+            },
             joinBy: joinRates,
             toEntity: (asset: WalletAsset, { rate, weekAgoRate }) =>
                 toPricedAsset(asset, rate, part === 'shown' ? weekAgoRate : undefined),
@@ -504,6 +509,7 @@ export const createAssetTableSelectors = <TState extends HomeAssetTableState>({
 
             return capped;
         },
+        { memoizeOptions: { resultEqualityCheck: haveSameGrouping } },
     );
 
     const selectCappedNetworkSymbols = createScopedSelector(
@@ -559,7 +565,11 @@ export const createAssetTableSelectors = <TState extends HomeAssetTableState>({
 
     const selectWalletAssetNetworkSymbol = selectWalletAssetField('networkSymbol');
     const selectWalletAssetContractAddress = selectWalletAssetField('contractAddress');
-    const selectWalletAssetAmount = selectWalletAssetField('amount');
+    const selectWalletAssetAmount = (
+        state: TState,
+        assetKey: WalletAssetKey | undefined,
+        isHidden?: boolean,
+    ) => selectWalletAsset(state, assetKey, isHidden)?.cryptoBalance.toFixed();
     const selectWalletAssetTokenDecimals = selectWalletAssetField('tokenDecimals');
     const selectWalletAssetHiddenReason = selectWalletAssetField('hiddenReason');
 
@@ -791,7 +801,7 @@ export const {
 } = createAssetTableSelectors({
     name: 'home',
     selectAccounts: selectVisibleDeviceAccounts,
-    assetAccountsIndex: deviceAssetAccountsIndex,
+    holdingsIndex: deviceHoldingsIndex,
 });
 
 export const selectNetworkName = createMemoizedSelector(

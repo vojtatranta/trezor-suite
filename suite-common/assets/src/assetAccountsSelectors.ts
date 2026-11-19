@@ -135,7 +135,7 @@ const coinDefinitionsIndex = createIndex({
     getId: (definitions: NetworkCoinDefinitions) => definitions.symbol,
 });
 
-export const createAssetAccountsIndex = <TState extends AssetAccountsRootState>(
+export const createHoldingsIndex = <TState extends AssetAccountsRootState>(
     name: string,
     selectAccountsOf: (state: TState) => readonly Account[],
 ) => {
@@ -152,33 +152,41 @@ export const createAssetAccountsIndex = <TState extends AssetAccountsRootState>(
         getId: ({ account }: StakedAccount) => account.key,
     });
 
-    return createAggregateIndex({
+    return createDerivedIndex({
         name,
-        source: createDerivedIndex({
-            name: `${name}Holdings`,
-            source: stakedAccountsIndex,
-            join: { definitions: coinDefinitionsIndex },
-            joinBy: ({ account }: StakedAccount) => ({ definitions: account.symbol }),
-            toEntity: ({ account, stakingAmount }: StakedAccount, { definitions }) =>
-                toAssetAccounts(account, stakingAmount, definitions?.coin),
-        }),
+        source: stakedAccountsIndex,
+        join: { definitions: coinDefinitionsIndex },
+        joinBy: ({ account }: StakedAccount) => ({ definitions: account.symbol }),
+        toEntity: ({ account, stakingAmount }: StakedAccount, { definitions }) =>
+            toAssetAccounts(account, stakingAmount, definitions?.coin),
+    });
+};
+
+export type HoldingsIndex<TState> = ReturnType<
+    typeof createHoldingsIndex<TState & AssetAccountsRootState>
+>;
+
+const toAssetAccountsIndex = (name: string, source: HoldingsIndex<AssetAccountsRootState>) =>
+    createAggregateIndex({
+        name,
+        source,
         expand: (holdings: readonly AssetAccount[]) => holdings,
         getId: (assetAccount: AssetAccount) => assetAccount.assetAccountKey,
         reduce: (_held: AssetAccount | undefined, assetAccount: AssetAccount) => assetAccount,
     });
-};
 
-const assetAccountsIndex = createAssetAccountsIndex('assetAccounts', selectAccounts);
-
-export type AssetAccountsIndex<TState> = ReturnType<
-    typeof createAssetAccountsIndex<TState & AssetAccountsRootState>
->;
+const assetAccountsIndex = toAssetAccountsIndex(
+    'assetAccounts',
+    createHoldingsIndex('holdings', selectAccounts),
+);
 
 /** Only the wallet on screen: another wallet's accounts are no work this table has to do. */
-export const deviceAssetAccountsIndex = createAssetAccountsIndex(
-    'deviceAssetAccounts',
+export const deviceHoldingsIndex = createHoldingsIndex(
+    'deviceHoldings',
     selectVisibleDeviceAccounts,
 );
+
+const deviceAssetAccountsIndex = toAssetAccountsIndex('deviceAssetAccounts', deviceHoldingsIndex);
 
 export const selectAssetAccounts = assetAccountsIndex.getEntities;
 
