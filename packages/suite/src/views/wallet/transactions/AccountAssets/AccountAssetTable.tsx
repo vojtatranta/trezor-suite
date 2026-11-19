@@ -29,7 +29,7 @@ import {
 import { AccountAssetRowContainer } from './AccountAssetRowContainer';
 
 type AccountAssetTableProps = {
-    accountKeys: readonly AccountKey[];
+    accountKey: AccountKey;
 };
 
 /**
@@ -37,18 +37,18 @@ type AccountAssetTableProps = {
  * small-balance switch is the one Home keeps; there is no grouping, as every row is the
  * account's network.
  */
-export const AccountAssetTable = ({ accountKeys }: AccountAssetTableProps) => {
+export const AccountAssetTable = ({ accountKey }: AccountAssetTableProps) => {
     const { dispatch } = useServices(injectDispatch);
     const [isExpanded, setIsExpanded] = useState(false);
-    const hasAssets = useSelector(state => selectHasShownWalletAssets(state, accountKeys));
-    const smallBalances = useSelector(state => selectSmallBalanceSummary(state, accountKeys));
+    const hasAssets = useSelector(state => selectHasShownWalletAssets(state, accountKey));
+    const smallBalances = useSelector(state => selectSmallBalanceSummary(state, accountKey));
     const areSmallBalancesShown = useSelector(selectAreHomeAssetSmallBalancesDisplayed);
     const isFoldable = useSelector(state =>
-        selectIsHomeAssetTableFoldable(state, HOME_ASSET_ROW_LIMIT, accountKeys),
+        selectIsHomeAssetTableFoldable(state, HOME_ASSET_ROW_LIMIT, accountKey),
     );
     const rowLimit = getHomeAssetRowLimit({ isFoldable, isExpanded });
     const assetKeys = useSelector(state =>
-        selectDisplayedWalletAssetKeys(state, rowLimit, accountKeys),
+        selectDisplayedWalletAssetKeys(state, rowLimit, accountKey),
     );
 
     const changeSmallBalances = (areShown: boolean) => {
@@ -95,7 +95,7 @@ export const AccountAssetTable = ({ accountKeys }: AccountAssetTableProps) => {
                     {assetKeys.map(assetKey => (
                         <AccountAssetRowContainer
                             key={assetKey}
-                            accountKeys={accountKeys}
+                            accountKey={accountKey}
                             assetKey={assetKey}
                         />
                     ))}

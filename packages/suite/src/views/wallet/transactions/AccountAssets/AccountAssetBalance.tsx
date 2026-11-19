@@ -18,17 +18,15 @@ import { HomeTotalBalance } from '#src/views/home/HomeBalance/HomeTotalBalance';
 const TOTAL_HEIGHT = 56;
 
 type AccountAssetBalanceProps = {
-    accountKeys: readonly AccountKey[];
+    accountKey: AccountKey;
 };
 
 /** What the account is worth in total, and how many assets make it up. */
-export const AccountAssetBalance = ({ accountKeys }: AccountAssetBalanceProps) => {
-    const assetCount = useSelector(state => selectShownWalletAssetKeys(state, accountKeys).length);
-    const { fiatValue } = useSelector(state => selectHomeAssetTotals(state, accountKeys));
-    const isIncomplete = useSelector(state =>
-        selectIsAssetTableTotalIncomplete(state, accountKeys),
-    );
-    const isRatePending = useSelector(state => selectIsAssetTableRatePending(state, accountKeys));
+export const AccountAssetBalance = ({ accountKey }: AccountAssetBalanceProps) => {
+    const assetCount = useSelector(state => selectShownWalletAssetKeys(state, accountKey).length);
+    const { fiatValue } = useSelector(state => selectHomeAssetTotals(state, accountKey));
+    const isIncomplete = useSelector(state => selectIsAssetTableTotalIncomplete(state, accountKey));
+    const isRatePending = useSelector(state => selectIsAssetTableRatePending(state, accountKey));
     const shouldAnimateSkeleton = useSelector(selectShouldAnimateLoadingSkeleton);
     const { balanceSectionRef } = useAccountHeaderContext();
 

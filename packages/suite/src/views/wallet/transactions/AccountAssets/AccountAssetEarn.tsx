@@ -18,26 +18,22 @@ import { AssetDetailEarnCard } from '#src/views/home/AssetDetail/AssetDetailEarn
 
 type AccountAssetEarnProps = {
     accountKey: AccountKey;
-    accountKeys: readonly AccountKey[];
 };
 
 /** The account's coin split as the asset detail splits the wallet's; View all opens Staking. */
-export const AccountAssetEarn = ({ accountKey, accountKeys }: AccountAssetEarnProps) => {
+export const AccountAssetEarn = ({ accountKey }: AccountAssetEarnProps) => {
     const { dispatch } = useServices(injectDispatch);
     const networkSymbol = useSelector(state => selectAccountByKey(state, accountKey)?.symbol);
     const coinKey = useSelector(state => selectAccountCoinAssetKey(state, accountKey));
-    const amount = useSelector(state =>
-        selectWalletAssetAmount(state, coinKey, false, accountKeys),
-    );
+    const amount = useSelector(state => selectWalletAssetAmount(state, coinKey, false, accountKey));
     const availableAmount = useSelector(state =>
-        selectWalletAssetAvailableAmount(state, coinKey, false, accountKeys),
+        selectWalletAssetAvailableAmount(state, coinKey, false, accountKey),
     );
     const stakingAmount = useSelector(state =>
-        selectWalletAssetStakingAmount(state, coinKey, false, accountKeys),
+        selectWalletAssetStakingAmount(state, coinKey, false, accountKey),
     );
     const stakingRatio =
-        useSelector(state => selectWalletAssetStakingRatio(state, coinKey, false, accountKeys)) ??
-        0;
+        useSelector(state => selectWalletAssetStakingRatio(state, coinKey, false, accountKey)) ?? 0;
     const { rate: apy } = useStakingRate({ symbol: networkSymbol, accountKey });
 
     if (

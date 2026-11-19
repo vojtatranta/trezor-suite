@@ -25,9 +25,13 @@ import { getAccountBalanceWithStaking, isNftToken } from '@suite-common/wallet-u
 import { type TokenInfo } from '@trezor/blockchain-link-types';
 import { type StaticSessionId } from '@trezor/device-utils';
 import {
+    EMPTY_INDEX_ENTITIES,
+    createAggregateIndex,
+    createDerivedIndex,
+    createIndex,
+    createSecondaryIndex,
     createWeakMapSelector,
     returnStableArrayIfEmpty,
-    weakMapMemoize,
 } from '@trezor/redux-utils';
 import { BigNumber } from '@trezor/utils';
 
@@ -40,7 +44,11 @@ export type AssetAccount = {
     contractAddress: TokenAddress | undefined;
     cryptoBalance: string;
     tokenInfo: TokenInfo | undefined;
+    /** Why the Home table leaves this token out, if it does. */
+    hiddenReason: HiddenTokenReason | undefined;
 };
+
+export type HiddenTokenReason = 'hiddenByUser' | 'unrecognized';
 
 export type AssetAccountsRootState = AccountsRootState &
     DeviceRootState &
@@ -51,209 +59,152 @@ const createMemoizedSelector = createWeakMapSelector.withTypes<AssetAccountsRoot
 
 const ZERO_STAKING_AMOUNT = stakingAmountSchema.parse('0');
 
-const createAssetAccount = weakMapMemoize(
-    (
-        assetAccountKey: AssetAccountKey,
-        accountKey: AccountKey,
-        assetKey: WalletAssetKey,
-        deviceState: StaticSessionId,
-        networkSymbol: NetworkSymbol,
+type CoinDefinitions = Parameters<typeof getTokens>[0]['tokenDefinitions'];
+
+const getHiddenReason = (
+    token: TokenInfo,
+    symbol: NetworkSymbol,
+    coinDefinitions: CoinDefinitions,
+): HiddenTokenReason | undefined => {
+    const { hiddenWithBalance, unverifiedWithBalance } = getTokens({
+        tokens: [token],
+        symbol,
+        tokenDefinitions: coinDefinitions,
+    });
+
+    if (hiddenWithBalance.length > 0) {
+        return 'hiddenByUser';
+    }
+
+    return unverifiedWithBalance.length > 0 ? 'unrecognized' : undefined;
+};
+
+const toAssetAccounts = (
+    account: Account,
+    stakingAmountOutsideBalance: StakingAmount,
+    coinDefinitions: CoinDefinitions,
+): readonly AssetAccount[] => {
+    const toAssetAccount = (
         contractAddress: TokenAddress | undefined,
         cryptoBalance: string,
         tokenInfo: TokenInfo | undefined,
     ): AssetAccount => ({
-        assetAccountKey,
-        accountKey,
-        assetKey,
-        deviceState,
-        networkSymbol,
+        assetAccountKey: getAssetAccountKey({ accountKey: account.key, contractAddress }),
+        accountKey: account.key,
+        assetKey: getWalletAssetKey({
+            deviceState: account.deviceState,
+            networkSymbol: account.symbol,
+            contractAddress,
+        }),
+        deviceState: account.deviceState,
+        networkSymbol: account.symbol,
         contractAddress,
         cryptoBalance,
         tokenInfo,
-    }),
-    // A native token keys the cache with strings only, one entry per balance ever shown: the bound
-    // keeps what is still read and drops stale balances a generation at a time.
-    { maxSize: 1000 },
-);
+        hiddenReason:
+            tokenInfo === undefined
+                ? undefined
+                : getHiddenReason(tokenInfo, account.symbol, coinDefinitions),
+    });
 
-const createStableAccountAssetAccounts = weakMapMemoize(
-    (...assetAccounts: AssetAccount[]) => assetAccounts,
-);
+    const tokenAccounts = (account.tokens ?? [])
+        .filter(token => !isNftToken(token) && new BigNumber(token.balance ?? '0').gt(0))
+        .map(token => toAssetAccount(token.contract as TokenAddress, token.balance ?? '0', token));
 
-const createStableAssetAccounts = weakMapMemoize(
-    (...assetAccounts: AssetAccount[]) => assetAccounts,
-);
-
-const getNativeTokenCryptoBalance = (
-    account: Account,
-    stakingAmountOutsideBalance: StakingAmount,
-) => getAccountBalanceWithStaking({ account, stakingBalance: stakingAmountOutsideBalance });
-
-// Keyed on the account object, so an account's asset accounts are rebuilt only when it or its
-// staking amount changes, and the cache entry goes with the account.
-const toAssetAccounts = weakMapMemoize(
-    (account: Account, stakingAmountOutsideBalance: StakingAmount): readonly AssetAccount[] => {
-        const toAssetAccount = (
-            contractAddress: TokenAddress | undefined,
-            cryptoBalance: string,
-            tokenInfo: TokenInfo | undefined,
-        ) =>
-            createAssetAccount(
-                getAssetAccountKey({ accountKey: account.key, contractAddress }),
-                account.key,
-                getWalletAssetKey({
-                    deviceState: account.deviceState,
-                    networkSymbol: account.symbol,
-                    contractAddress,
-                }),
-                account.deviceState,
-                account.symbol,
-                contractAddress,
-                cryptoBalance,
-                tokenInfo,
-            );
-
-        const tokenAccounts = (account.tokens ?? [])
-            .filter(token => !isNftToken(token) && new BigNumber(token.balance ?? '0').gt(0))
-            .map(token =>
-                toAssetAccount(token.contract as TokenAddress, token.balance ?? '0', token),
-            );
-
-        return createStableAccountAssetAccounts(
-            toAssetAccount(
-                undefined,
-                getNativeTokenCryptoBalance(account, stakingAmountOutsideBalance),
-                undefined,
-            ),
-            ...tokenAccounts,
-        );
-    },
-);
-
-// Inputs are the accounts and the staking amounts, never the whole state, so an unrelated update
-// does not walk the accounts again.
-const toStableAssetAccounts = (
-    accounts: readonly Account[],
-    amountsOutsideBalance: Partial<Record<AccountKey, StakingAmount>>,
-): readonly AssetAccount[] =>
-    returnStableArrayIfEmpty(
-        createStableAssetAccounts(
-            ...accounts.flatMap(account =>
-                toAssetAccounts(account, amountsOutsideBalance[account.key] ?? ZERO_STAKING_AMOUNT),
-            ),
+    return [
+        toAssetAccount(
+            undefined,
+            getAccountBalanceWithStaking({ account, stakingBalance: stakingAmountOutsideBalance }),
+            undefined,
         ),
-    );
+        ...tokenAccounts,
+    ];
+};
 
-export const selectAssetAccounts = createMemoizedSelector(
-    [selectAccounts, selectStakingAmountsOutsideBalance],
-    toStableAssetAccounts,
-);
+type StakedAccount = { account: Account; stakingAmount: StakingAmount };
+
+type NetworkCoinDefinitions = { symbol: string; coin: CoinDefinitions };
+
+// Joined to each account, so definitions landing for one network re-read that network's accounts.
+const coinDefinitionsIndex = createIndex({
+    name: 'coinDefinitions',
+    source: createMemoizedSelector([selectTokenDefinitions], definitions =>
+        Object.entries(definitions ?? {}).map(([symbol, definition]): NetworkCoinDefinitions => ({
+            symbol,
+            coin: definition?.coin,
+        })),
+    ),
+    getId: (definitions: NetworkCoinDefinitions) => definitions.symbol,
+});
+
+// An account and its staking amount are one entity, so a write to either re-expands that account
+// alone, and an asset account equal to the one held keeps its object.
+const createAssetAccountsIndex = (
+    name: string,
+    selectAccountsOf: (state: AssetAccountsRootState) => readonly Account[],
+) => {
+    const stakedAccountsIndex = createIndex({
+        name: `${name}Accounts`,
+        source: createMemoizedSelector(
+            [selectAccountsOf, selectStakingAmountsOutsideBalance],
+            (accounts, amounts): StakedAccount[] =>
+                accounts.map(account => ({
+                    account,
+                    stakingAmount: amounts[account.key] ?? ZERO_STAKING_AMOUNT,
+                })),
+        ),
+        getId: ({ account }: StakedAccount) => account.key,
+    });
+
+    return createAggregateIndex({
+        name,
+        source: createDerivedIndex({
+            name: `${name}Holdings`,
+            source: stakedAccountsIndex,
+            join: { definitions: coinDefinitionsIndex },
+            joinBy: ({ account }: StakedAccount) => ({ definitions: account.symbol }),
+            toEntity: ({ account, stakingAmount }: StakedAccount, { definitions }) =>
+                toAssetAccounts(account, stakingAmount, definitions?.coin),
+        }),
+        expand: (holdings: readonly AssetAccount[]) => holdings,
+        getId: (assetAccount: AssetAccount) => assetAccount.assetAccountKey,
+        reduce: (_held: AssetAccount | undefined, assetAccount: AssetAccount) => assetAccount,
+    });
+};
+
+const assetAccountsIndex = createAssetAccountsIndex('assetAccounts', selectAccounts);
 
 /** Only the wallet on screen: another wallet's accounts are no work this table has to do. */
-export const selectDeviceAssetAccounts = createMemoizedSelector(
-    [selectVisibleDeviceAccounts, selectStakingAmountsOutsideBalance],
-    toStableAssetAccounts,
+const deviceAssetAccountsIndex = createAssetAccountsIndex(
+    'deviceAssetAccounts',
+    selectVisibleDeviceAccounts,
 );
 
-type AssetAccountsByContract = ReadonlyMap<TokenAddress, readonly AssetAccount[]>;
+export const selectAssetAccounts = assetAccountsIndex.getEntities;
 
-const selectAssetAccountsByToken = createMemoizedSelector(
-    [selectAssetAccounts],
-    (assetAccounts): ReadonlyMap<NetworkSymbol, AssetAccountsByContract> => {
-        const byNetwork = new Map<NetworkSymbol, Map<TokenAddress, AssetAccount[]>>();
+export const selectDeviceAssetAccounts = deviceAssetAccountsIndex.getEntities;
 
-        assetAccounts.forEach(assetAccount => {
-            const { networkSymbol, contractAddress } = assetAccount;
+const deviceAssetAccountsByAsset = createSecondaryIndex({
+    name: 'deviceAssetAccountsByAsset',
+    source: deviceAssetAccountsIndex,
+    getKeys: (assetAccount: AssetAccount) => assetAccount.assetKey,
+});
 
-            if (contractAddress === undefined) {
-                return;
-            }
-
-            let byContract = byNetwork.get(networkSymbol);
-
-            if (byContract === undefined) {
-                byContract = new Map<TokenAddress, AssetAccount[]>();
-                byNetwork.set(networkSymbol, byContract);
-            }
-
-            const held = byContract.get(contractAddress);
-
-            if (held === undefined) {
-                byContract.set(contractAddress, [assetAccount]);
-            } else {
-                held.push(assetAccount);
-            }
-        });
-
-        return byNetwork;
-    },
-);
-
-export type HiddenTokenReason = 'hiddenByUser' | 'unrecognized';
-
-export const selectHiddenTokenReasons = createMemoizedSelector(
-    [selectAssetAccountsByToken, selectTokenDefinitions],
-    (
-        byNetwork,
-        tokenDefinitions,
-    ): ReadonlyMap<NetworkSymbol, ReadonlyMap<TokenAddress, HiddenTokenReason>> => {
-        const reasons = new Map<NetworkSymbol, Map<TokenAddress, HiddenTokenReason>>();
-
-        byNetwork.forEach((byContract, symbol) => {
-            byContract.forEach((group, contractAddress) => {
-                const [assetAccount] = group;
-
-                if (assetAccount?.tokenInfo === undefined) {
-                    return;
-                }
-
-                const { hiddenWithBalance, hiddenWithoutBalance, unverifiedWithBalance } =
-                    getTokens({
-                        tokens: [assetAccount.tokenInfo],
-                        symbol,
-                        tokenDefinitions: tokenDefinitions?.[symbol]?.coin,
-                    });
-
-                const isHiddenByUser = hiddenWithBalance.length + hiddenWithoutBalance.length > 0;
-
-                if (!isHiddenByUser && unverifiedWithBalance.length === 0) {
-                    return;
-                }
-
-                const hiddenOnNetwork =
-                    reasons.get(symbol) ?? new Map<TokenAddress, HiddenTokenReason>();
-
-                hiddenOnNetwork.set(
-                    contractAddress,
-                    isHiddenByUser ? 'hiddenByUser' : 'unrecognized',
-                );
-                reasons.set(symbol, hiddenOnNetwork);
-            });
-        });
-
-        return reasons;
-    },
-);
+/** The asset accounts of the wallet on screen holding one asset, in account order. */
+export const selectDeviceAssetAccountsOfAsset = (
+    state: AssetAccountsRootState,
+    assetKey: WalletAssetKey | undefined,
+): readonly AssetAccount[] =>
+    assetKey === undefined
+        ? EMPTY_INDEX_ENTITIES
+        : deviceAssetAccountsByAsset.getEntities(state, assetKey);
 
 export const selectHiddenAssetAccountKeys = createMemoizedSelector(
-    [selectAssetAccountsByToken, selectHiddenTokenReasons],
-    (byNetwork, reasons) => {
-        const keys: AssetAccountKey[] = [];
-
-        reasons.forEach((hiddenOnNetwork, symbol) => {
-            hiddenOnNetwork.forEach((_reason, contractAddress) => {
-                byNetwork
-                    .get(symbol)
-                    ?.get(contractAddress)
-                    ?.forEach(assetAccount => keys.push(assetAccount.assetAccountKey));
-            });
-        });
-
-        return returnStableArrayIfEmpty(keys);
-    },
-);
-
-export const selectHiddenAssetAccountKeySet = createMemoizedSelector(
-    [selectHiddenAssetAccountKeys],
-    (keys): ReadonlySet<AssetAccountKey> => new Set(keys),
+    [selectAssetAccounts],
+    (assetAccounts): readonly AssetAccountKey[] =>
+        returnStableArrayIfEmpty(
+            assetAccounts
+                .filter(assetAccount => assetAccount.hiddenReason !== undefined)
+                .map(assetAccount => assetAccount.assetAccountKey),
+        ),
 );

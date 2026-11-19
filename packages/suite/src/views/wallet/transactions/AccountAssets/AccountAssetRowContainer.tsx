@@ -17,30 +17,30 @@ import { useSelector } from '#src/hooks/suite';
 import { AssetTableRowView } from '#src/views/home/HomeAssetsTable/AssetTableRowView';
 
 type AccountAssetRowContainerProps = {
-    accountKeys: readonly AccountKey[];
+    accountKey: AccountKey;
     assetKey: WalletAssetKey;
 };
 
 /** A Home asset row with what one account holds of the asset. */
 export const AccountAssetRowContainer = memo(function AccountAssetRowContainer({
-    accountKeys,
+    accountKey,
     assetKey,
 }: AccountAssetRowContainerProps) {
     const { dispatch } = useServices(injectDispatch);
     const networkSymbol = useSelector(state =>
-        selectWalletAssetNetworkSymbol(state, assetKey, false, accountKeys),
+        selectWalletAssetNetworkSymbol(state, assetKey, false, accountKey),
     );
     const contractAddress = useSelector(state =>
-        selectWalletAssetContractAddress(state, assetKey, false, accountKeys),
+        selectWalletAssetContractAddress(state, assetKey, false, accountKey),
     );
     const tokenSymbol = useSelector(state =>
-        selectWalletAssetTokenSymbol(state, assetKey, false, accountKeys),
+        selectWalletAssetTokenSymbol(state, assetKey, false, accountKey),
     );
     const tokenDecimals = useSelector(state =>
-        selectWalletAssetTokenDecimals(state, assetKey, false, accountKeys),
+        selectWalletAssetTokenDecimals(state, assetKey, false, accountKey),
     );
     const amount = useSelector(state =>
-        selectWalletAssetAmount(state, assetKey, false, accountKeys),
+        selectWalletAssetAmount(state, assetKey, false, accountKey),
     );
 
     if (networkSymbol === undefined) {

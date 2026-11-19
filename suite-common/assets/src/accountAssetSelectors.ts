@@ -20,8 +20,6 @@ import {
 
 const createMemoizedSelector = createWeakMapSelector.withTypes<HomeAssetTableState>();
 
-type AccountKeys = readonly AccountKey[] | undefined;
-
 export const selectAccountCoinAssetKey = createMemoizedSelector(
     [(state: HomeAssetTableState, accountKey: AccountKey) => selectAccountByKey(state, accountKey)],
     account =>
@@ -41,10 +39,10 @@ export const selectAccountCoinAssetKey = createMemoizedSelector(
 const isAssetRatePending = (
     state: HomeAssetTableState,
     assetKey: WalletAssetKey,
-    accountKeys: AccountKeys,
+    accountKey: AccountKey | undefined,
 ) => {
-    const networkSymbol = selectWalletAssetNetworkSymbol(state, assetKey, false, accountKeys);
-    const contractAddress = selectWalletAssetContractAddress(state, assetKey, false, accountKeys);
+    const networkSymbol = selectWalletAssetNetworkSymbol(state, assetKey, false, accountKey);
+    const contractAddress = selectWalletAssetContractAddress(state, assetKey, false, accountKey);
 
     return (
         networkSymbol !== undefined &&
@@ -59,18 +57,18 @@ const isAssetRatePending = (
 const isAssetUnpriced = (
     state: HomeAssetTableState,
     assetKey: WalletAssetKey,
-    accountKeys: AccountKeys,
-) => selectWalletAssetFiatValue(state, assetKey, accountKeys) === undefined;
+    accountKey: AccountKey | undefined,
+) => selectWalletAssetFiatValue(state, assetKey, accountKey) === undefined;
 
 /** Whether a rate the table still lacks is on its way, so its total is worth waiting for. */
 export const selectIsAssetTableRatePending = (
     state: HomeAssetTableState,
-    accountKeys?: AccountKeys,
+    accountKey?: AccountKey,
 ) =>
-    selectShownWalletAssetKeys(state, accountKeys).some(
+    selectShownWalletAssetKeys(state, accountKey).some(
         assetKey =>
-            isAssetUnpriced(state, assetKey, accountKeys) &&
-            isAssetRatePending(state, assetKey, accountKeys),
+            isAssetUnpriced(state, assetKey, accountKey) &&
+            isAssetRatePending(state, assetKey, accountKey),
     );
 
 /**
@@ -79,16 +77,16 @@ export const selectIsAssetTableRatePending = (
  */
 export const selectIsAssetTableTotalIncomplete = (
     state: HomeAssetTableState,
-    accountKeys?: AccountKeys,
+    accountKey?: AccountKey,
 ) => {
-    const assetKeys = selectShownWalletAssetKeys(state, accountKeys);
+    const assetKeys = selectShownWalletAssetKeys(state, accountKey);
 
     return (
-        assetKeys.some(assetKey => !isAssetUnpriced(state, assetKey, accountKeys)) &&
+        assetKeys.some(assetKey => !isAssetUnpriced(state, assetKey, accountKey)) &&
         assetKeys.some(
             assetKey =>
-                isAssetUnpriced(state, assetKey, accountKeys) &&
-                !isAssetRatePending(state, assetKey, accountKeys),
+                isAssetUnpriced(state, assetKey, accountKey) &&
+                !isAssetRatePending(state, assetKey, accountKey),
         )
     );
 };
