@@ -28,16 +28,22 @@ import {
     selectCurrentFiatRates,
     selectEnabledSupportedNetworks,
     selectHomeAssetsTableGrouping,
+    selectIsTokenFiatRateDisallowed,
     selectLastWeekFiatRates,
     selectVisibleDeviceAccounts,
 } from '@suite-common/wallet-core';
 import {
     type Account,
-    type AccountKey,
     type BaseCurrencyAmount,
     asBaseCurrencyAmount,
 } from '@suite-common/wallet-types';
-import { hasNetworkFeatures, isPositiveBalance, toFiatCurrency } from '@suite-common/wallet-utils';
+import {
+    getFiatRateKey,
+    hasNetworkFeatures,
+    isPositiveBalance,
+    isTestnet,
+    toFiatCurrency,
+} from '@suite-common/wallet-utils';
 import {
     createAggregateIndex,
     createDerivedIndex,
@@ -50,9 +56,11 @@ import { BigNumber } from '@trezor/utils';
 
 import {
     type AssetAccount,
+    type AssetAccountsIndex,
     type AssetAccountsRootState,
     type HiddenTokenReason,
-    selectDeviceAssetAccounts,
+    createAssetAccountsIndex,
+    deviceAssetAccountsIndex,
     selectDeviceAssetAccountsOfAsset,
 } from './assetAccountsSelectors';
 
@@ -68,7 +76,6 @@ const ZERO = new BigNumber(0);
 
 const worth = (fiatValue: BigNumber | undefined) => fiatValue ?? ZERO;
 
-/** Shallow equality, except that two numbers are the same number rather than the same object. */
 const haveSameValues = <TEntity extends object>(previous: TEntity, next: TEntity) =>
     Object.keys(previous).length === Object.keys(next).length &&
     Object.keys(next).every(field => {
@@ -79,26 +86,6 @@ const haveSameValues = <TEntity extends object>(previous: TEntity, next: TEntity
             ? left.eq(right)
             : left === right;
     });
-
-// --- What the wallet holds: its asset accounts, the shown ones and the hidden ones apart.
-
-const selectPartitionedAssetAccounts = createMemoizedSelector(
-    [selectDeviceAssetAccounts],
-    assetAccounts => ({
-        shown: assetAccounts.filter(({ hiddenReason }) => hiddenReason === undefined),
-        hidden: assetAccounts.filter(({ hiddenReason }) => hiddenReason !== undefined),
-    }),
-);
-
-const createAssetAccountsIndex = (name: string, part: 'shown' | 'hidden') =>
-    createIndex({
-        name,
-        source: (state: HomeAssetTableState) => selectPartitionedAssetAccounts(state)[part],
-        getId: (assetAccount: AssetAccount) => assetAccount.assetAccountKey,
-    });
-
-const shownAssetAccountsIndex = createAssetAccountsIndex('homeShownAssetAccounts', 'shown');
-const hiddenAssetAccountsIndex = createAssetAccountsIndex('homeHiddenAssetAccounts', 'hidden');
 
 type WalletAsset = {
     assetKey: WalletAssetKey;
@@ -140,23 +127,6 @@ const addAssetAccount = (
     };
 };
 
-// The asset accounts folded into one asset per coin or token, across the accounts holding it.
-const createAssetsIndex = (name: string, source: typeof shownAssetAccountsIndex) =>
-    createAggregateIndex({
-        name,
-        source,
-        expand: (assetAccount: AssetAccount) => [assetAccount],
-        getId: (assetAccount: AssetAccount) => assetAccount.assetKey,
-        reduce: addAssetAccount,
-        isEqual: haveSameValues,
-    });
-
-const assetsIndex = createAssetsIndex('homeAssets', shownAssetAccountsIndex);
-const hiddenAssetsIndex = createAssetsIndex('homeHiddenAssets', hiddenAssetAccountsIndex);
-
-// --- The rates in the base currency, by the asset they price. A rate is an entity, so rates
-// rewritten with the same numbers change nothing, and one that moved reaches only what it prices.
-
 type RateEntry = { key: string; rate: number | undefined; usdRate: number | undefined };
 
 const toRateKey = (networkSymbol: NetworkSymbol, contractAddress: TokenAddress | undefined) =>
@@ -189,16 +159,20 @@ const createRatesIndex = (
         getId: (entry: RateEntry) => entry.key,
     });
 
-const currentRatesIndex = createRatesIndex('homeCurrentRates', selectCurrentFiatRates);
-const lastWeekRatesIndex = createRatesIndex('homeLastWeekRates', selectLastWeekFiatRates);
+const ratesJoin = {
+    rate: createRatesIndex('currentRates', selectCurrentFiatRates),
+    weekAgoRate: createRatesIndex('lastWeekRates', selectLastWeekFiatRates),
+};
 
-// --- The assets priced, the most valuable first. What nothing can price goes below everything
-// that can, even below what is worth zero.
+const joinRates = ({ networkSymbol, contractAddress }: WalletAsset) => {
+    const rateKey = toRateKey(networkSymbol, contractAddress);
+
+    return { rate: rateKey, weekAgoRate: rateKey };
+};
 
 type PricedAsset = WalletAsset & {
     fiatValue: BigNumber | undefined;
     weekAgoFiatValue: BigNumber | undefined;
-    /** What a dollar is in the base currency, by this asset's rate; see `selectUsdToBaseCurrencyRate`. */
     usdToBaseCurrencyRate: number | undefined;
 };
 
@@ -232,61 +206,8 @@ const byValue = (left: PricedAsset, right: PricedAsset) => {
 const byValueThenCryptoBalance = (left: PricedAsset, right: PricedAsset) =>
     byValue(left, right) || (right.cryptoBalance.comparedTo(left.cryptoBalance) ?? 0);
 
-const ratesJoin = { rate: currentRatesIndex, weekAgoRate: lastWeekRatesIndex };
-
-const joinRates = ({
-    networkSymbol,
-    contractAddress,
-}: Pick<WalletAsset, 'networkSymbol'> & Pick<WalletAsset, 'contractAddress'>) => {
-    const rateKey = toRateKey(networkSymbol, contractAddress);
-
-    return { rate: rateKey, weekAgoRate: rateKey };
-};
-
-const pricedAssetsIndex = createDerivedIndex({
-    name: 'homePricedAssets',
-    source: assetsIndex,
-    join: ratesJoin,
-    joinBy: joinRates,
-    toEntity: (asset: WalletAsset, { rate, weekAgoRate }) =>
-        toPricedAsset(asset, rate, weekAgoRate),
-    sort: byValue,
-    isEqual: haveSameValues,
-});
-
-const pricedHiddenAssetsIndex = createDerivedIndex({
-    name: 'homePricedHiddenAssets',
-    source: hiddenAssetsIndex,
-    join: ratesJoin,
-    joinBy: joinRates,
-    toEntity: (asset: WalletAsset, { rate }) => toPricedAsset(asset, rate, undefined),
-    sort: byValueThenCryptoBalance,
-    isEqual: haveSameValues,
-});
-
-// --- Each account's own holdings, priced: what the overview of one account lists.
-
-type PricedAccountAsset = PricedAsset & { accountKey: AccountKey };
-
-const pricedAccountAssetsIndex = createDerivedIndex({
-    name: 'homePricedAccountAssets',
-    source: shownAssetAccountsIndex,
-    join: ratesJoin,
-    joinBy: joinRates,
-    toEntity: (assetAccount: AssetAccount, { rate, weekAgoRate }): PricedAccountAsset => ({
-        ...toPricedAsset(addAssetAccount(undefined, assetAccount), rate, weekAgoRate),
-        accountKey: assetAccount.accountKey,
-    }),
-    isEqual: haveSameValues,
-});
-
-const pricedAssetsByAccount = createSecondaryIndex({
-    name: 'homePricedAssetsByAccount',
-    source: pricedAccountAssetsIndex,
-    getKeys: (asset: PricedAccountAsset) => asset.accountKey,
-});
-
-// --- The rows of a table: the wallet's, or with an account key, that account's alone.
+const toAssetKeys = (assets: readonly PricedAsset[]): readonly WalletAssetKey[] =>
+    returnStableArrayIfEmpty(assets.map(asset => asset.assetKey));
 
 // Enabled networks are what discovery looks for on a device. The Portfolio Tracker discovers
 // nothing: its accounts are imported one by one, on networks that setting may not hold.
@@ -295,92 +216,7 @@ const selectAllowedNetworkSymbols = (state: HomeAssetTableState): readonly Netwo
         ? selectSupportedNetworkSymbols(state)
         : selectEnabledSupportedNetworks(state);
 
-// Sorted per account, as it is read: sorting every account's holdings on each rate would cost
-// what only the account on screen needs.
-const selectAccountPricedAssets = createMemoizedSelector(
-    [
-        (state: HomeAssetTableState, accountKey: AccountKey) =>
-            pricedAssetsByAccount.getEntities(state, accountKey),
-    ],
-    (assets): readonly PricedAsset[] => [...assets].sort(byValue),
-);
-
-const selectPricedAssets = (
-    state: HomeAssetTableState,
-    accountKey?: AccountKey,
-): readonly PricedAsset[] =>
-    accountKey === undefined
-        ? pricedAssetsIndex.getEntities(state)
-        : selectAccountPricedAssets(state, accountKey);
-
-// An account asked for by key is listed whatever networks the wallet has enabled.
-const selectShownNetworkSymbols = (state: HomeAssetTableState, accountKey?: AccountKey) =>
-    accountKey === undefined ? selectAllowedNetworkSymbols(state) : undefined;
-
-const selectShownAssets = createMemoizedSelector(
-    [selectPricedAssets, selectShownNetworkSymbols],
-    (assets, shownNetworks): readonly PricedAsset[] =>
-        returnStableArrayIfEmpty(
-            assets.filter(
-                asset =>
-                    shownNetworks?.includes(asset.networkSymbol) !== false &&
-                    asset.cryptoBalance.gt(0),
-            ),
-        ),
-    { memoizeOptions: { resultEqualityCheck: shallowEqual } },
-);
-
-const toAssetKeys = (assets: readonly PricedAsset[]): readonly WalletAssetKey[] =>
-    returnStableArrayIfEmpty(assets.map(asset => asset.assetKey));
-
-export const selectShownWalletAssetKeys = createMemoizedSelector([selectShownAssets], toAssetKeys, {
-    memoizeOptions: { resultEqualityCheck: shallowEqual },
-});
-
-/** Whether there is anything to draw at all: a boolean, so a reorder of the rows is no re-render. */
-export const selectHasShownWalletAssets = createMemoizedSelector(
-    [selectShownWalletAssetKeys],
-    (assetKeys): boolean => assetKeys.length > 0,
-);
-
-// --- Small balances.
-
 const SMALL_BALANCE_USD_VALUE = new BigNumber(1);
-
-/**
- * What a dollar is in the chosen currency, as one plain number. Every current rate carries its dollar
- * rate (see `CurrentFiatRatesResult`) and a provider prices everything through one exchange-rate
- * table, so `rate / usdRate` is the same for every asset it holds — one asset's pair is enough, and
- * nothing need be priced twice. Two providers can sit on slightly different snapshots, so an asset
- * worth almost exactly a dollar may fall on either side of the line; for a switch that hides dust
- * that is nothing. The most valuable priced asset is asked first: its rates are the ones most watched.
- */
-const selectUsdToBaseCurrencyRate = createMemoizedSelector(
-    [selectShownAssets, selectBaseCurrency],
-    (assets, baseCurrencyCode): number | undefined =>
-        baseCurrencyCode === 'usd'
-            ? 1
-            : assets.find(asset => asset.usdToBaseCurrencyRate !== undefined)
-                  ?.usdToBaseCurrencyRate,
-);
-
-/**
- * Assets worth under $1 in the selected currency. An unpriced asset is never small, and nothing is
- * small until the USD rate is known, so nothing is hidden by mistake.
- */
-const selectSmallBalanceAssets = createMemoizedSelector(
-    [selectShownAssets, selectUsdToBaseCurrencyRate],
-    (assets, usdToBaseCurrencyRate): readonly PricedAsset[] => {
-        if (usdToBaseCurrencyRate === undefined) {
-            return returnStableArrayIfEmpty([]);
-        }
-
-        const threshold = SMALL_BALANCE_USD_VALUE.times(usdToBaseCurrencyRate);
-
-        // Rates and balances are never negative, so neither is a value: no `abs` needed.
-        return returnStableArrayIfEmpty(assets.filter(asset => asset.fiatValue?.lt(threshold)));
-    },
-);
 
 export type SmallBalanceSummary = {
     assetCount: number;
@@ -398,23 +234,10 @@ const haveSameSmallBalanceSummary = (
     return left.assetCount === right.assetCount && left.fiatValue.eq(right.fiatValue);
 };
 
-export const selectSmallBalanceSummary = createMemoizedSelector(
-    [selectSmallBalanceAssets],
-    (small): SmallBalanceSummary | undefined =>
-        small.length === 0
-            ? undefined
-            : {
-                  assetCount: small.length,
-                  fiatValue: small.reduce(
-                      (total, asset) => total.plus(worth(asset.fiatValue)),
-                      ZERO,
-                  ),
-              },
-    { memoizeOptions: { resultEqualityCheck: haveSameSmallBalanceSummary } },
-);
-
 export const selectIsHomeAssetTableMenuAvailable = (state: HomeAssetTableState) =>
     !selectHasBitcoinOnlyFirmware(state);
+
+export type HomeAssetGrouping = 'default' | 'networks';
 
 /** The saved grouping, or the default one while the menu that sets it is not offered. */
 export const selectHomeAssetGrouping = (state: HomeAssetTableState): HomeAssetGrouping =>
@@ -427,202 +250,554 @@ export const selectHomeAssetGrouping = (state: HomeAssetTableState): HomeAssetGr
 export const selectAreHomeAssetSmallBalancesDisplayed = (state: HomeAssetTableState) =>
     !selectIsHomeAssetTableMenuAvailable(state) || selectAreHomeAssetSmallBalancesShown(state);
 
-const selectDisplayedAssets = createMemoizedSelector(
-    [
-        selectShownAssets,
-        selectSmallBalanceAssets,
-        (state: HomeAssetTableState) => selectAreHomeAssetSmallBalancesDisplayed(state),
-    ],
-    (assets, small, areSmallBalancesShown): readonly PricedAsset[] =>
-        areSmallBalancesShown
-            ? assets
-            : returnStableArrayIfEmpty(assets.filter(asset => !small.includes(asset))),
-    { memoizeOptions: { resultEqualityCheck: shallowEqual } },
-);
+const haveSameGrouping = <Group>(
+    left: ReadonlyMap<Group, readonly WalletAssetKey[]>,
+    right: ReadonlyMap<Group, readonly WalletAssetKey[]>,
+) =>
+    left.size === right.size &&
+    [...left].every(([group, assetKeys]) => shallowEqual(right.get(group), assetKeys));
 
-const selectAllDisplayedAssetKeys = createMemoizedSelector([selectDisplayedAssets], toAssetKeys, {
-    memoizeOptions: { resultEqualityCheck: shallowEqual },
-});
+export type HomeAssetTotals = {
+    /** Undefined while nothing the wallet holds can be priced; zero once it holds nothing at all. */
+    fiatValue: BigNumber | undefined;
+    weekChange: BigNumber | undefined;
+    weekChangePercent: BigNumber | undefined;
+};
 
-/** How many rows the table may show before it folds, `HOME_ASSET_ROW_LIMIT` on both platforms. */
-const selectRowLimit = (_state: HomeAssetTableState, rowLimit?: number) => rowLimit;
+const addUp = (values: readonly (BigNumber | undefined)[]) =>
+    values.reduce<BigNumber>((total, value) => total.plus(worth(value)), ZERO);
 
-const selectAllDisplayedAssetKeysOf = (
-    state: HomeAssetTableState,
-    _rowLimit?: number,
-    accountKey?: AccountKey,
-) => selectAllDisplayedAssetKeys(state, accountKey);
+const getAccountStakingAmount = (state: HomeAssetTableState, account: Account) =>
+    selectCountedStakingPositionEntriesByAccount(state, account.key).reduce(
+        (total, { position }) => total.plus(getStakingPositionAmount(position)),
+        ZERO,
+    );
 
-/** Whether the table has more to show than the limit allows: a boolean, so a reorder below it is no re-render. */
-export const selectIsHomeAssetTableFoldable = createMemoizedSelector(
-    [selectAllDisplayedAssetKeysOf, selectRowLimit],
-    (assetKeys, rowLimit): boolean => rowLimit !== undefined && assetKeys.length > rowLimit,
-);
+type AssetTableScope<TState extends HomeAssetTableState> = {
+    name: string;
+    selectAccounts: (state: TState) => readonly Account[];
+    assetAccountsIndex?: AssetAccountsIndex<TState>;
+    isKeptToAllowedNetworks?: boolean;
+};
 
-/** The rows to draw, cut to `rowLimit` while the table is folded; every row when none is given. */
-export const selectDisplayedWalletAssetKeys = createMemoizedSelector(
-    [selectAllDisplayedAssetKeysOf, selectRowLimit],
-    (assetKeys, rowLimit): readonly WalletAssetKey[] =>
-        returnStableArrayIfEmpty(rowLimit === undefined ? assetKeys : assetKeys.slice(0, rowLimit)),
-    { memoizeOptions: { resultEqualityCheck: shallowEqual } },
-);
+export const createAssetTableSelectors = <TState extends HomeAssetTableState>({
+    name,
+    selectAccounts,
+    assetAccountsIndex = createAssetAccountsIndex(`${name}AssetAccounts`, selectAccounts),
+    isKeptToAllowedNetworks = true,
+}: AssetTableScope<TState>) => {
+    const createScopedSelector = createWeakMapSelector.withTypes<TState>();
 
-// --- The rows grouped by network.
+    const selectPartitionedAssetAccounts = createScopedSelector(
+        [assetAccountsIndex.getEntities],
+        assetAccounts => ({
+            shown: assetAccounts.filter(({ hiddenReason }) => hiddenReason === undefined),
+            hidden: assetAccounts.filter(({ hiddenReason }) => hiddenReason !== undefined),
+        }),
+    );
 
-export type HomeAssetGrouping = 'default' | 'networks';
-
-const displayedAssetsIndex = createIndex({
-    name: 'homeDisplayedAssets',
-    source: (state: HomeAssetTableState) => selectDisplayedAssets(state),
-    getId: (asset: PricedAsset) => asset.assetKey,
-});
-
-const displayedAssetsByNetwork = createSecondaryIndex({
-    name: 'homeDisplayedAssetsByNetwork',
-    source: displayedAssetsIndex,
-    getKeys: (asset: PricedAsset) => asset.networkSymbol,
-});
-
-/**
- * What each network is worth. A network nothing can price — a testnet, or rates that have yet to
- * land — is left out: a total of zero would be a lie.
- */
-const selectNetworkFiatValues = createMemoizedSelector(
-    [(state: HomeAssetTableState) => selectShownAssets(state)],
-    (assets): ReadonlyMap<NetworkSymbol, BigNumber> => {
-        const byNetwork = new Map<NetworkSymbol, BigNumber>();
-
-        assets.forEach(({ networkSymbol, fiatValue }) => {
-            if (fiatValue !== undefined) {
-                byNetwork.set(networkSymbol, worth(byNetwork.get(networkSymbol)).plus(fiatValue));
-            }
+    const createAssetsIndexes = (
+        part: 'shown' | 'hidden',
+        sort: (left: PricedAsset, right: PricedAsset) => number,
+    ) => {
+        const assets = createAggregateIndex({
+            name: `${name}${part}Assets`,
+            source: createIndex({
+                name: `${name}${part}AssetAccounts`,
+                source: (state: TState) => selectPartitionedAssetAccounts(state)[part],
+                getId: (assetAccount: AssetAccount) => assetAccount.assetAccountKey,
+            }),
+            expand: (assetAccount: AssetAccount) => [assetAccount],
+            getId: (assetAccount: AssetAccount) => assetAccount.assetKey,
+            reduce: addAssetAccount,
+            isEqual: haveSameValues,
+        });
+        const priced = createDerivedIndex({
+            name: `${name}${part}PricedAssets`,
+            source: assets,
+            join: ratesJoin,
+            joinBy: joinRates,
+            toEntity: (asset: WalletAsset, { rate, weekAgoRate }) =>
+                toPricedAsset(asset, rate, part === 'shown' ? weekAgoRate : undefined),
+            sort,
+            isEqual: haveSameValues,
         });
 
-        return byNetwork;
-    },
-);
+        return { assets, priced };
+    };
 
-/** The networks the shown assets are held on, the most valuable network first. */
-const selectSortedNetworkSymbols = createMemoizedSelector(
-    [displayedAssetsByNetwork.getKeys, selectNetworkFiatValues],
-    (symbols, values): readonly NetworkSymbol[] =>
-        returnStableArrayIfEmpty(
-            [...symbols].sort(
-                (left, right) => worth(values.get(right)).comparedTo(worth(values.get(left))) ?? 0,
+    const shown = createAssetsIndexes('shown', byValue);
+    const hidden = createAssetsIndexes('hidden', byValueThenCryptoBalance);
+
+    const selectShownAssets = createScopedSelector(
+        [
+            shown.priced.getEntities,
+            (state: TState) =>
+                isKeptToAllowedNetworks ? selectAllowedNetworkSymbols(state) : undefined,
+        ],
+        (assets, allowedNetworks): readonly PricedAsset[] =>
+            returnStableArrayIfEmpty(
+                assets.filter(
+                    asset =>
+                        allowedNetworks?.includes(asset.networkSymbol) !== false &&
+                        asset.cryptoBalance.gt(0),
+                ),
             ),
-        ),
-    { memoizeOptions: { resultEqualityCheck: shallowEqual } },
-);
+        { memoizeOptions: { resultEqualityCheck: shallowEqual } },
+    );
 
-export const selectCappedAssetKeysByNetwork = createMemoizedSelector(
-    [
-        (state: HomeAssetTableState) => selectSortedNetworkSymbols(state),
-        displayedAssetsIndex.read,
-        selectRowLimit,
-    ],
-    (symbols, displayed, rowLimit): ReadonlyMap<NetworkSymbol, readonly WalletAssetKey[]> => {
-        const capped = new Map<NetworkSymbol, readonly WalletAssetKey[]>();
-        let budget = rowLimit ?? Infinity;
+    const selectShownWalletAssetKeys = createScopedSelector([selectShownAssets], toAssetKeys, {
+        memoizeOptions: { resultEqualityCheck: shallowEqual },
+    });
 
-        symbols.forEach(symbol => {
-            const held = displayed.ids.filter(
-                assetKey => displayed.byId.get(assetKey)?.networkSymbol === symbol,
-            );
-            const taken = budget >= held.length ? held : held.slice(0, budget);
+    /** Whether there is anything to draw at all: a boolean, so a reorder of the rows is no re-render. */
+    const selectHasShownWalletAssets = createScopedSelector(
+        [selectShownWalletAssetKeys],
+        (assetKeys): boolean => assetKeys.length > 0,
+    );
 
-            if (taken.length === 0) {
-                return;
+    /**
+     * What a dollar is in the chosen currency, as one plain number. Every current rate carries its
+     * dollar rate (see `CurrentFiatRatesResult`) and a provider prices everything through one
+     * exchange-rate table, so `rate / usdRate` is the same for every asset it holds — one asset's
+     * pair is enough. Two providers can sit on slightly different snapshots, so an asset worth almost
+     * exactly a dollar may fall on either side of the line; for a switch that hides dust that is
+     * nothing. The most valuable priced asset is asked first: its rates are the ones most watched.
+     */
+    const selectUsdToBaseCurrencyRate = createScopedSelector(
+        [selectShownAssets, selectBaseCurrency],
+        (assets, baseCurrencyCode): number | undefined =>
+            baseCurrencyCode === 'usd'
+                ? 1
+                : assets.find(asset => asset.usdToBaseCurrencyRate !== undefined)
+                      ?.usdToBaseCurrencyRate,
+    );
+
+    /**
+     * Assets worth under $1 in the selected currency. An unpriced asset is never small, and nothing
+     * is small until the USD rate is known, so nothing is hidden by mistake.
+     */
+    const selectSmallBalanceAssets = createScopedSelector(
+        [selectShownAssets, selectUsdToBaseCurrencyRate],
+        (assets, usdToBaseCurrencyRate): readonly PricedAsset[] => {
+            if (usdToBaseCurrencyRate === undefined) {
+                return returnStableArrayIfEmpty([]);
             }
 
-            capped.set(symbol, taken);
-            budget -= taken.length;
-        });
+            const threshold = SMALL_BALANCE_USD_VALUE.times(usdToBaseCurrencyRate);
 
-        return capped;
-    },
-);
+            // Rates and balances are never negative, so neither is a value: no `abs` needed.
+            return returnStableArrayIfEmpty(assets.filter(asset => asset.fiatValue?.lt(threshold)));
+        },
+    );
 
-const selectCappedNetworkSymbols = createMemoizedSelector(
-    [selectCappedAssetKeysByNetwork],
-    (byNetwork): readonly NetworkSymbol[] => returnStableArrayIfEmpty([...byNetwork.keys()]),
-    { memoizeOptions: { resultEqualityCheck: shallowEqual } },
-);
+    const selectSmallBalanceSummary = createScopedSelector(
+        [selectSmallBalanceAssets],
+        (small): SmallBalanceSummary | undefined =>
+            small.length === 0
+                ? undefined
+                : {
+                      assetCount: small.length,
+                      fiatValue: addUp(small.map(asset => asset.fiatValue)),
+                  },
+        { memoizeOptions: { resultEqualityCheck: haveSameSmallBalanceSummary } },
+    );
 
-export const selectDisplayedNetworkSymbols = createMemoizedSelector(
-    [
-        (state: HomeAssetTableState) => selectSortedNetworkSymbols(state),
-        selectCappedNetworkSymbols,
-        selectRowLimit,
-    ],
-    (sorted, capped, rowLimit): readonly NetworkSymbol[] =>
-        rowLimit === undefined ? sorted : capped,
-);
+    const selectDisplayedAssets = createScopedSelector(
+        [selectShownAssets, selectSmallBalanceAssets, selectAreHomeAssetSmallBalancesDisplayed],
+        (assets, small, areSmallBalancesShown): readonly PricedAsset[] =>
+            areSmallBalancesShown
+                ? assets
+                : returnStableArrayIfEmpty(assets.filter(asset => !small.includes(asset))),
+        { memoizeOptions: { resultEqualityCheck: shallowEqual } },
+    );
 
-// A network's rows are the secondary index's own list, which keeps its array while its members
-// stand; a fold cuts it only while the network is over the budget the networks above it left.
-export const selectDisplayedWalletAssetKeysOfNetwork = createMemoizedSelector(
-    [
-        (state: HomeAssetTableState, symbol: NetworkSymbol) =>
-            displayedAssetsByNetwork.getIds(state, symbol),
-        (state: HomeAssetTableState, symbol: NetworkSymbol, rowLimit?: number) =>
-            selectCappedAssetKeysByNetwork(state, rowLimit).get(symbol)?.length ?? 0,
-    ],
-    (assetKeys, count): readonly WalletAssetKey[] =>
-        count >= assetKeys.length ? assetKeys : returnStableArrayIfEmpty(assetKeys.slice(0, count)),
-);
+    const selectAllDisplayedAssetKeys = createScopedSelector([selectDisplayedAssets], toAssetKeys, {
+        memoizeOptions: { resultEqualityCheck: shallowEqual },
+    });
+
+    /** How many rows the table may show before it folds, `HOME_ASSET_ROW_LIMIT` on both platforms. */
+    const selectRowLimit = (_state: TState, rowLimit?: number) => rowLimit;
+
+    /** Whether the table has more to show than the limit allows: a boolean, so a reorder below it is no re-render. */
+    const selectIsHomeAssetTableFoldable = createScopedSelector(
+        [selectAllDisplayedAssetKeys, selectRowLimit],
+        (assetKeys, rowLimit): boolean => rowLimit !== undefined && assetKeys.length > rowLimit,
+    );
+
+    /** The rows to draw, cut to `rowLimit` while the table is folded; every row when none is given. */
+    const selectDisplayedWalletAssetKeys = createScopedSelector(
+        [selectAllDisplayedAssetKeys, selectRowLimit],
+        (assetKeys, rowLimit): readonly WalletAssetKey[] =>
+            returnStableArrayIfEmpty(
+                rowLimit === undefined ? assetKeys : assetKeys.slice(0, rowLimit),
+            ),
+        { memoizeOptions: { resultEqualityCheck: shallowEqual } },
+    );
+
+    const displayedAssetsIndex = createIndex({
+        name: `${name}DisplayedAssets`,
+        source: selectDisplayedAssets,
+        getId: (asset: PricedAsset) => asset.assetKey,
+    });
+
+    const displayedAssetsByNetwork = createSecondaryIndex({
+        name: `${name}DisplayedAssetsByNetwork`,
+        source: displayedAssetsIndex,
+        getKeys: (asset: PricedAsset) => asset.networkSymbol,
+    });
+
+    /**
+     * What each network is worth. A network nothing can price — a testnet, or rates that have yet
+     * to land — is left out: a total of zero would be a lie.
+     */
+    const selectNetworkFiatValues = createScopedSelector(
+        [selectShownAssets],
+        (assets): ReadonlyMap<NetworkSymbol, BigNumber> => {
+            const byNetwork = new Map<NetworkSymbol, BigNumber>();
+
+            assets.forEach(({ networkSymbol, fiatValue }) => {
+                if (fiatValue !== undefined) {
+                    byNetwork.set(
+                        networkSymbol,
+                        worth(byNetwork.get(networkSymbol)).plus(fiatValue),
+                    );
+                }
+            });
+
+            return byNetwork;
+        },
+    );
+
+    /** The networks the shown assets are held on, the most valuable network first. */
+    const selectSortedNetworkSymbols = createScopedSelector(
+        [displayedAssetsByNetwork.getKeys, selectNetworkFiatValues],
+        (symbols, values): readonly NetworkSymbol[] =>
+            returnStableArrayIfEmpty(
+                [...symbols].sort(
+                    (left, right) =>
+                        worth(values.get(right)).comparedTo(worth(values.get(left))) ?? 0,
+                ),
+            ),
+        { memoizeOptions: { resultEqualityCheck: shallowEqual } },
+    );
+
+    const selectCappedAssetKeysByNetwork = createScopedSelector(
+        [selectSortedNetworkSymbols, displayedAssetsIndex.read, selectRowLimit],
+        (symbols, displayed, rowLimit): ReadonlyMap<NetworkSymbol, readonly WalletAssetKey[]> => {
+            const capped = new Map<NetworkSymbol, readonly WalletAssetKey[]>();
+            let budget = rowLimit ?? Infinity;
+
+            symbols.forEach(symbol => {
+                const held = displayed.ids.filter(
+                    assetKey => displayed.byId.get(assetKey)?.networkSymbol === symbol,
+                );
+                const taken = budget >= held.length ? held : held.slice(0, budget);
+
+                if (taken.length === 0) {
+                    return;
+                }
+
+                capped.set(symbol, taken);
+                budget -= taken.length;
+            });
+
+            return capped;
+        },
+    );
+
+    const selectCappedNetworkSymbols = createScopedSelector(
+        [selectCappedAssetKeysByNetwork],
+        (byNetwork): readonly NetworkSymbol[] => returnStableArrayIfEmpty([...byNetwork.keys()]),
+        { memoizeOptions: { resultEqualityCheck: shallowEqual } },
+    );
+
+    const selectDisplayedNetworkSymbols = createScopedSelector(
+        [selectSortedNetworkSymbols, selectCappedNetworkSymbols, selectRowLimit],
+        (sorted, capped, rowLimit): readonly NetworkSymbol[] =>
+            rowLimit === undefined ? sorted : capped,
+    );
+
+    const selectDisplayedWalletAssetKeysOfNetwork = createScopedSelector(
+        [
+            (state: TState, symbol: NetworkSymbol) =>
+                displayedAssetsByNetwork.getIds(state, symbol),
+            (state: TState, symbol: NetworkSymbol, rowLimit?: number) =>
+                selectCappedAssetKeysByNetwork(state, rowLimit).get(symbol)?.length ?? 0,
+        ],
+        (assetKeys, count): readonly WalletAssetKey[] =>
+            count >= assetKeys.length
+                ? assetKeys
+                : returnStableArrayIfEmpty(assetKeys.slice(0, count)),
+    );
+
+    const selectNetworkFiatValue = (state: TState, symbol: NetworkSymbol) =>
+        selectNetworkFiatValues(state).get(symbol)?.toFixed();
+
+    const lookUp =
+        <TAsset>(
+            selectShown: (state: TState, assetKey: WalletAssetKey) => TAsset | undefined,
+            selectHidden: (state: TState, assetKey: WalletAssetKey) => TAsset | undefined,
+        ) =>
+        (state: TState, assetKey: WalletAssetKey | undefined, isHidden = false) => {
+            if (assetKey === undefined) {
+                return undefined;
+            }
+
+            return isHidden
+                ? selectHidden(state, assetKey)
+                : (selectShown(state, assetKey) ?? selectHidden(state, assetKey));
+        };
+
+    const selectWalletAsset = lookUp(shown.assets.getById, hidden.assets.getById);
+    const selectPricedWalletAsset = lookUp(shown.priced.getById, hidden.priced.getById);
+
+    const selectWalletAssetField =
+        <TField extends keyof WalletAsset>(field: TField) =>
+        (state: TState, assetKey: WalletAssetKey | undefined, isHidden?: boolean) =>
+            selectWalletAsset(state, assetKey, isHidden)?.[field];
+
+    const selectWalletAssetNetworkSymbol = selectWalletAssetField('networkSymbol');
+    const selectWalletAssetContractAddress = selectWalletAssetField('contractAddress');
+    const selectWalletAssetAmount = selectWalletAssetField('amount');
+    const selectWalletAssetTokenDecimals = selectWalletAssetField('tokenDecimals');
+    const selectWalletAssetHiddenReason = selectWalletAssetField('hiddenReason');
+
+    const selectWalletAssetTokenSymbol = (
+        state: TState,
+        assetKey: WalletAssetKey | undefined,
+        isHidden?: boolean,
+    ) => selectWalletAsset(state, assetKey, isHidden)?.tokenSymbol ?? null;
+
+    const selectWalletAssetAccountCount = (
+        state: TState,
+        assetKey: WalletAssetKey | undefined,
+        isHidden?: boolean,
+    ) => selectWalletAsset(state, assetKey, isHidden)?.accountCount ?? 0;
+
+    const selectWalletAssetFiatValue = (
+        state: TState,
+        assetKey: WalletAssetKey | undefined,
+    ): BaseCurrencyAmount | undefined => {
+        const fiatValue = selectPricedWalletAsset(state, assetKey)?.fiatValue;
+
+        return fiatValue === undefined ? undefined : asBaseCurrencyAmount(fiatValue);
+    };
+
+    const selectWalletAssetStakingAmount = createScopedSelector(
+        [
+            (state: TState) => state,
+            selectAccounts,
+            selectWalletAssetNetworkSymbol,
+            selectWalletAssetContractAddress,
+        ],
+        (state, accounts, networkSymbol, contractAddress): string => {
+            if (networkSymbol === undefined || contractAddress !== undefined) {
+                return '0';
+            }
+
+            const stakingAmount = accounts.reduce(
+                (total, account) =>
+                    account.symbol === networkSymbol
+                        ? total.plus(getAccountStakingAmount(state, account))
+                        : total,
+                ZERO,
+            );
+
+            return formatStakingAmount({
+                amount: stakingAmountSchema.parse(stakingAmount.toFixed(0)),
+                networkSymbol,
+            });
+        },
+    );
+
+    const selectWalletAssetStakingRatio = createScopedSelector(
+        [selectWalletAssetAmount, selectWalletAssetStakingAmount],
+        (totalAmount, stakingAmount) => {
+            if (
+                totalAmount === undefined ||
+                !isPositiveBalance(totalAmount) ||
+                !isPositiveBalance(stakingAmount)
+            ) {
+                return undefined;
+            }
+
+            return Number(stakingAmount) / Number(totalAmount);
+        },
+    );
+
+    const selectWalletAssetAvailableAmount = createScopedSelector(
+        [selectWalletAssetAmount, selectWalletAssetStakingAmount],
+        (totalAmount, stakingAmount) =>
+            totalAmount === undefined
+                ? undefined
+                : new BigNumber(totalAmount).minus(stakingAmount).toFixed(),
+    );
+
+    const selectHiddenWalletAssetKeysByReason = createScopedSelector(
+        [hidden.priced.getEntities, selectAllowedNetworkSymbols],
+        (assets, allowedNetworks): ReadonlyMap<HiddenTokenReason, readonly WalletAssetKey[]> => {
+            const byReason = new Map<HiddenTokenReason, WalletAssetKey[]>();
+
+            assets.forEach(({ assetKey, networkSymbol, hiddenReason: reason }) => {
+                if (reason !== undefined && allowedNetworks.includes(networkSymbol)) {
+                    byReason.set(reason, [...(byReason.get(reason) ?? []), assetKey]);
+                }
+            });
+
+            return byReason;
+        },
+        // Rebuilt on every account write, so a rebuild that lands on the same lists is thrown away and
+        // each group keeps the array it was handed; the per-reason selector below must stay unchecked.
+        { memoizeOptions: { resultEqualityCheck: haveSameGrouping } },
+    );
+
+    const selectHiddenWalletAssetKeys = createScopedSelector(
+        [
+            (state: TState) => selectHiddenWalletAssetKeysByReason(state),
+            (_state: TState, reason: HiddenTokenReason) => reason,
+        ],
+        (byReason, reason): readonly WalletAssetKey[] =>
+            returnStableArrayIfEmpty(byReason.get(reason) ?? []),
+    );
+
+    const selectHiddenWalletAssetCount = createScopedSelector(
+        [selectHiddenWalletAssetKeysByReason],
+        byReason =>
+            [...byReason.values()].reduce((count, assetKeys) => count + assetKeys.length, 0),
+    );
+
+    const selectHasHiddenWalletAssets = createScopedSelector(
+        [selectHiddenWalletAssetKeysByReason],
+        byReason => byReason.size > 0,
+    );
+
+    const selectHomeAssetTotals = createScopedSelector(
+        [selectShownAssets],
+        (assets): HomeAssetTotals => {
+            if (assets.length === 0) {
+                return { fiatValue: ZERO, weekChange: ZERO, weekChangePercent: ZERO };
+            }
+
+            const priced = assets.filter(asset => asset.fiatValue !== undefined);
+            const fiatValue =
+                priced.length === 0 ? undefined : addUp(priced.map(asset => asset.fiatValue));
+
+            // An asset priced in only one of the two weeks would read as a gain or a loss it never
+            // made, so the change is over the assets both weeks could price.
+            const comparable = priced.filter(asset => asset.weekAgoFiatValue !== undefined);
+            const weekAgoFiatValue = addUp(comparable.map(asset => asset.weekAgoFiatValue));
+
+            if (weekAgoFiatValue.isZero()) {
+                return { fiatValue, weekChange: undefined, weekChangePercent: undefined };
+            }
+
+            const weekChange = addUp(comparable.map(asset => asset.fiatValue)).minus(
+                weekAgoFiatValue,
+            );
+
+            return { fiatValue, weekChange, weekChangePercent: weekChange.div(weekAgoFiatValue) };
+        },
+    );
+
+    /**
+     * Whether an unpriced asset's rate is still on its way. A testnet is never priced, a token whose
+     * rate is not fetched never gets one, and a failed fetch has given up, so none is waited for.
+     */
+    const isRatePending = (state: TState, { networkSymbol, contractAddress }: PricedAsset) =>
+        !isTestnet(networkSymbol) &&
+        !selectIsTokenFiatRateDisallowed(state, networkSymbol, contractAddress) &&
+        !selectCurrentFiatRates(state)?.[
+            getFiatRateKey(networkSymbol, selectBaseCurrency(state), contractAddress)
+        ]?.error;
+
+    const selectUnpricedAssets = createScopedSelector(
+        [selectShownAssets],
+        (assets): readonly PricedAsset[] =>
+            returnStableArrayIfEmpty(assets.filter(asset => asset.fiatValue === undefined)),
+    );
+
+    /** Whether a rate the table still lacks is on its way, so its total is worth waiting for. */
+    const selectIsAssetTableRatePending = (state: TState) =>
+        selectUnpricedAssets(state).some(asset => isRatePending(state, asset));
+
+    /**
+     * Whether the total leaves out a held asset that has no rate to come. One still on its way is
+     * not counted: the total is only short of it until it lands.
+     */
+    const selectIsAssetTableTotalIncomplete = (state: TState) =>
+        selectUnpricedAssets(state).length < selectShownAssets(state).length &&
+        selectUnpricedAssets(state).some(asset => !isRatePending(state, asset));
+
+    return {
+        selectShownWalletAssetKeys,
+        selectHasShownWalletAssets,
+        selectSmallBalanceSummary,
+        selectIsHomeAssetTableFoldable,
+        selectDisplayedWalletAssetKeys,
+        selectCappedAssetKeysByNetwork,
+        selectDisplayedNetworkSymbols,
+        selectDisplayedWalletAssetKeysOfNetwork,
+        selectNetworkFiatValue,
+        selectWalletAssetNetworkSymbol,
+        selectWalletAssetContractAddress,
+        selectWalletAssetAmount,
+        selectWalletAssetAccountCount,
+        selectWalletAssetTokenSymbol,
+        selectWalletAssetTokenDecimals,
+        selectWalletAssetFiatValue,
+        selectWalletAssetHiddenReason,
+        selectWalletAssetStakingAmount,
+        selectWalletAssetStakingRatio,
+        selectWalletAssetAvailableAmount,
+        selectHiddenWalletAssetKeys,
+        selectHiddenWalletAssetCount,
+        selectHasHiddenWalletAssets,
+        selectHomeAssetTotals,
+        selectIsAssetTableRatePending,
+        selectIsAssetTableTotalIncomplete,
+    };
+};
+
+export type AssetTableSelectors<TState extends HomeAssetTableState> = ReturnType<
+    typeof createAssetTableSelectors<TState>
+>;
+
+export const {
+    selectShownWalletAssetKeys,
+    selectHasShownWalletAssets,
+    selectSmallBalanceSummary,
+    selectIsHomeAssetTableFoldable,
+    selectDisplayedWalletAssetKeys,
+    selectCappedAssetKeysByNetwork,
+    selectDisplayedNetworkSymbols,
+    selectDisplayedWalletAssetKeysOfNetwork,
+    selectNetworkFiatValue,
+    selectWalletAssetNetworkSymbol,
+    selectWalletAssetContractAddress,
+    selectWalletAssetAmount,
+    selectWalletAssetAccountCount,
+    selectWalletAssetTokenSymbol,
+    selectWalletAssetTokenDecimals,
+    selectWalletAssetFiatValue,
+    selectWalletAssetHiddenReason,
+    selectWalletAssetStakingAmount,
+    selectWalletAssetStakingRatio,
+    selectWalletAssetAvailableAmount,
+    selectHiddenWalletAssetKeys,
+    selectHiddenWalletAssetCount,
+    selectHasHiddenWalletAssets,
+    selectHomeAssetTotals,
+} = createAssetTableSelectors({
+    name: 'home',
+    selectAccounts: selectVisibleDeviceAccounts,
+    assetAccountsIndex: deviceAssetAccountsIndex,
+});
 
 export const selectNetworkName = createMemoizedSelector(
     [selectNetworkNamesMap, (_state: HomeAssetTableState, symbol: NetworkSymbol) => symbol],
     (names, symbol) => names?.[symbol],
 );
-
-export const selectNetworkFiatValue = (state: HomeAssetTableState, symbol: NetworkSymbol) =>
-    selectNetworkFiatValues(state).get(symbol)?.toFixed();
-
-// --- One asset.
-
-const selectAccountAssetsByKey = createMemoizedSelector(
-    [
-        (state: HomeAssetTableState, accountKey: AccountKey) =>
-            pricedAssetsByAccount.getEntities(state, accountKey),
-    ],
-    (assets): ReadonlyMap<WalletAssetKey, PricedAsset> =>
-        new Map(assets.map(asset => [asset.assetKey, asset])),
-);
-
-type Lookup<TAsset> = {
-    shown: (state: HomeAssetTableState, assetKey: WalletAssetKey) => TAsset | undefined;
-    hidden: (state: HomeAssetTableState, assetKey: WalletAssetKey) => TAsset | undefined;
-};
-
-const lookUp =
-    <TAsset extends WalletAsset>({ shown, hidden }: Lookup<TAsset>) =>
-    (
-        state: HomeAssetTableState,
-        assetKey: WalletAssetKey | undefined,
-        isHidden = false,
-        accountKey?: AccountKey,
-    ): TAsset | PricedAsset | undefined => {
-        if (assetKey === undefined) {
-            return undefined;
-        }
-
-        if (accountKey !== undefined) {
-            return selectAccountAssetsByKey(state, accountKey).get(assetKey);
-        }
-
-        return isHidden
-            ? hidden(state, assetKey)
-            : (shown(state, assetKey) ?? hidden(state, assetKey));
-    };
-
-// What an asset is needs no rate, so it is read before the assets are priced.
-const selectWalletAsset = lookUp({ shown: assetsIndex.getById, hidden: hiddenAssetsIndex.getById });
-
-const selectPricedWalletAsset = lookUp({
-    shown: pricedAssetsIndex.getById,
-    hidden: pricedHiddenAssetsIndex.getById,
-});
 
 export const selectWalletAssetKey = createMemoizedSelector(
     [
@@ -644,48 +819,6 @@ export const selectWalletAssetKey = createMemoizedSelector(
               }),
 );
 
-const selectWalletAssetField =
-    <TField extends keyof WalletAsset>(field: TField) =>
-    (
-        state: HomeAssetTableState,
-        assetKey: WalletAssetKey | undefined,
-        isHidden?: boolean,
-        accountKey?: AccountKey,
-    ) =>
-        selectWalletAsset(state, assetKey, isHidden, accountKey)?.[field];
-
-export const selectWalletAssetNetworkSymbol = selectWalletAssetField('networkSymbol');
-
-export const selectWalletAssetContractAddress = selectWalletAssetField('contractAddress');
-
-export const selectWalletAssetAmount = selectWalletAssetField('amount');
-
-export const selectWalletAssetAccountCount = (
-    state: HomeAssetTableState,
-    assetKey: WalletAssetKey | undefined,
-    isHidden?: boolean,
-) => selectWalletAsset(state, assetKey, isHidden)?.accountCount ?? 0;
-
-export const selectWalletAssetTokenSymbol = (
-    state: HomeAssetTableState,
-    assetKey: WalletAssetKey | undefined,
-    isHidden?: boolean,
-    accountKey?: AccountKey,
-) => selectWalletAsset(state, assetKey, isHidden, accountKey)?.tokenSymbol ?? null;
-
-export const selectWalletAssetTokenDecimals = selectWalletAssetField('tokenDecimals');
-
-export const selectWalletAssetFiatValue = (
-    state: HomeAssetTableState,
-    assetKey: WalletAssetKey | undefined,
-    accountKey?: AccountKey,
-): BaseCurrencyAmount | undefined => {
-    const asset = selectPricedWalletAsset(state, assetKey, false, accountKey);
-    const fiatValue = asset !== undefined && 'fiatValue' in asset ? asset.fiatValue : undefined;
-
-    return fiatValue === undefined ? undefined : asBaseCurrencyAmount(fiatValue);
-};
-
 export const selectWalletAssetHoldings = createMemoizedSelector(
     [selectDeviceAssetAccountsOfAsset],
     (assetAccounts): readonly AssetAccount[] =>
@@ -703,159 +836,4 @@ export const selectWalletAssetSignVerifyAccounts = createMemoizedSelector(
                     account.symbol === networkSymbol && hasNetworkFeatures(account, 'sign-verify'),
             ),
         ),
-);
-
-// --- Staking.
-
-const selectHomeAssetTableState = (state: HomeAssetTableState) => state;
-
-const getAccountStakingAmount = (state: HomeAssetTableState, account: Account) =>
-    selectCountedStakingPositionEntriesByAccount(state, account.key).reduce(
-        (total, { position }) => total.plus(getStakingPositionAmount(position)),
-        ZERO,
-    );
-
-export const selectWalletAssetStakingAmount = createMemoizedSelector(
-    [
-        selectHomeAssetTableState,
-        selectVisibleDeviceAccounts,
-        selectWalletAssetNetworkSymbol,
-        selectWalletAssetContractAddress,
-        (
-            _state: HomeAssetTableState,
-            _assetKey: WalletAssetKey | undefined,
-            _isHidden?: boolean,
-            accountKey?: AccountKey,
-        ) => accountKey,
-    ],
-    (state, accounts, networkSymbol, contractAddress, accountKey): string => {
-        if (networkSymbol === undefined || contractAddress !== undefined) {
-            return '0';
-        }
-
-        const stakingAmount = accounts.reduce(
-            (total, account) =>
-                account.symbol === networkSymbol && (accountKey ?? account.key) === account.key
-                    ? total.plus(getAccountStakingAmount(state, account))
-                    : total,
-            ZERO,
-        );
-
-        return formatStakingAmount({
-            amount: stakingAmountSchema.parse(stakingAmount.toFixed(0)),
-            networkSymbol,
-        });
-    },
-);
-
-export const selectWalletAssetStakingRatio = createMemoizedSelector(
-    [selectWalletAssetAmount, selectWalletAssetStakingAmount],
-    (totalAmount, stakingAmount) => {
-        if (
-            totalAmount === undefined ||
-            !isPositiveBalance(totalAmount) ||
-            !isPositiveBalance(stakingAmount)
-        ) {
-            return undefined;
-        }
-
-        return Number(stakingAmount) / Number(totalAmount);
-    },
-);
-
-export const selectWalletAssetAvailableAmount = createMemoizedSelector(
-    [selectWalletAssetAmount, selectWalletAssetStakingAmount],
-    (totalAmount, stakingAmount) =>
-        totalAmount === undefined
-            ? undefined
-            : new BigNumber(totalAmount).minus(stakingAmount).toFixed(),
-);
-
-// --- The tokens the table leaves out.
-
-const haveSameGrouping = <Group>(
-    left: ReadonlyMap<Group, readonly WalletAssetKey[]>,
-    right: ReadonlyMap<Group, readonly WalletAssetKey[]>,
-) =>
-    left.size === right.size &&
-    [...left].every(([group, assetKeys]) => shallowEqual(right.get(group), assetKeys));
-
-const selectHiddenWalletAssetKeysByReason = createMemoizedSelector(
-    [pricedHiddenAssetsIndex.getEntities, selectAllowedNetworkSymbols],
-    (assets, allowedNetworks): ReadonlyMap<HiddenTokenReason, readonly WalletAssetKey[]> => {
-        const byReason = new Map<HiddenTokenReason, WalletAssetKey[]>();
-
-        assets.forEach(({ assetKey, networkSymbol, hiddenReason: reason }) => {
-            if (reason !== undefined && allowedNetworks.includes(networkSymbol)) {
-                byReason.set(reason, [...(byReason.get(reason) ?? []), assetKey]);
-            }
-        });
-
-        return byReason;
-    },
-    // Rebuilt on every hidden balance write, so a rebuild that lands on the same lists is thrown
-    // away and each group keeps the array it was handed; the per-reason selector stays unchecked.
-    { memoizeOptions: { resultEqualityCheck: haveSameGrouping } },
-);
-
-export const selectHiddenWalletAssetKeys = createMemoizedSelector(
-    [
-        (state: HomeAssetTableState) => selectHiddenWalletAssetKeysByReason(state),
-        (_state: HomeAssetTableState, reason: HiddenTokenReason) => reason,
-    ],
-    (byReason, reason): readonly WalletAssetKey[] =>
-        returnStableArrayIfEmpty(byReason.get(reason) ?? []),
-);
-
-export const selectHiddenWalletAssetCount = createMemoizedSelector(
-    [selectHiddenWalletAssetKeysByReason],
-    byReason => [...byReason.values()].reduce((count, assetKeys) => count + assetKeys.length, 0),
-);
-
-export const selectHasHiddenWalletAssets = createMemoizedSelector(
-    [selectHiddenWalletAssetKeysByReason],
-    byReason => byReason.size > 0,
-);
-
-export const selectWalletAssetHiddenReason = (
-    state: HomeAssetTableState,
-    assetKey: WalletAssetKey | undefined,
-): HiddenTokenReason | undefined => selectWalletAsset(state, assetKey)?.hiddenReason;
-
-// --- The total over the table.
-
-export type HomeAssetTotals = {
-    /** Undefined while nothing the wallet holds can be priced; zero once it holds nothing at all. */
-    fiatValue: BigNumber | undefined;
-    weekChange: BigNumber | undefined;
-    weekChangePercent: BigNumber | undefined;
-};
-
-const addUp = (values: readonly (BigNumber | undefined)[]) =>
-    values.reduce<BigNumber>((total, value) => total.plus(worth(value)), ZERO);
-
-export const selectHomeAssetTotals = createMemoizedSelector(
-    [selectShownAssets],
-    (assets): HomeAssetTotals => {
-        if (assets.length === 0) {
-            return { fiatValue: ZERO, weekChange: ZERO, weekChangePercent: ZERO };
-        }
-
-        const priced = assets.filter(asset => asset.fiatValue !== undefined);
-        const fiatValue =
-            priced.length === 0 ? undefined : addUp(priced.map(asset => asset.fiatValue));
-
-        // An asset priced in only one of the two weeks would read as a gain or a loss it never
-        // made, so the change is over the assets both weeks could price.
-        const comparable = priced.filter(asset => asset.weekAgoFiatValue !== undefined);
-        const weekAgoFiatValue = addUp(comparable.map(asset => asset.weekAgoFiatValue));
-
-        if (weekAgoFiatValue.isZero()) {
-            return { fiatValue, weekChange: undefined, weekChangePercent: undefined };
-        }
-
-        const weekChange = addUp(comparable.map(asset => asset.fiatValue)).minus(weekAgoFiatValue);
-
-        return { fiatValue, weekChange, weekChangePercent: weekChange.div(weekAgoFiatValue) };
-    },
 );

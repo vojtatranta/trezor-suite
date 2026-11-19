@@ -13,9 +13,9 @@ type AccountAssetOverviewProps = {
 export const AccountAssetOverview = ({ accountKey }: AccountAssetOverviewProps) => (
     <Column gap={16} alignItems="stretch" data-testid="@wallet/account-assets">
         <Row gap={16} alignItems="stretch" flexWrap="wrap">
-            <AccountAssetBalance accountKey={accountKey} />
+            <AccountAssetBalance />
             <AccountAssetEarn accountKey={accountKey} />
         </Row>
-        <AccountAssetTable accountKey={accountKey} />
+        <AccountAssetTable />
     </Column>
 );

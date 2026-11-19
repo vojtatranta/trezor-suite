@@ -1,11 +1,4 @@
 import { gotoThunk } from '@suite/router';
-import {
-    selectAccountCoinAssetKey,
-    selectWalletAssetAmount,
-    selectWalletAssetAvailableAmount,
-    selectWalletAssetStakingAmount,
-    selectWalletAssetStakingRatio,
-} from '@suite-common/assets';
 import { isSupportedStakingNetworkSymbol, selectAccountByKey } from '@suite-common/wallet-core';
 import { type AccountKey } from '@suite-common/wallet-types';
 import { isPositiveBalance } from '@suite-common/wallet-utils';
@@ -16,6 +9,8 @@ import { useStakingRate } from '#src/hooks/earn/useStakingRate';
 import { useSelector } from '#src/hooks/suite';
 import { AssetDetailEarnCard } from '#src/views/home/AssetDetail/AssetDetailEarnCard';
 
+import { accountAssetTable, selectSelectedAccountCoinAssetKey } from './selectedAccountAssetTable';
+
 type AccountAssetEarnProps = {
     accountKey: AccountKey;
 };
@@ -24,16 +19,16 @@ type AccountAssetEarnProps = {
 export const AccountAssetEarn = ({ accountKey }: AccountAssetEarnProps) => {
     const { dispatch } = useServices(injectDispatch);
     const networkSymbol = useSelector(state => selectAccountByKey(state, accountKey)?.symbol);
-    const coinKey = useSelector(state => selectAccountCoinAssetKey(state, accountKey));
-    const amount = useSelector(state => selectWalletAssetAmount(state, coinKey, false, accountKey));
+    const coinKey = useSelector(selectSelectedAccountCoinAssetKey);
+    const amount = useSelector(state => accountAssetTable.selectWalletAssetAmount(state, coinKey));
     const availableAmount = useSelector(state =>
-        selectWalletAssetAvailableAmount(state, coinKey, false, accountKey),
+        accountAssetTable.selectWalletAssetAvailableAmount(state, coinKey),
     );
     const stakingAmount = useSelector(state =>
-        selectWalletAssetStakingAmount(state, coinKey, false, accountKey),
+        accountAssetTable.selectWalletAssetStakingAmount(state, coinKey),
     );
     const stakingRatio =
-        useSelector(state => selectWalletAssetStakingRatio(state, coinKey, false, accountKey)) ?? 0;
+        useSelector(state => accountAssetTable.selectWalletAssetStakingRatio(state, coinKey)) ?? 0;
     const { rate: apy } = useStakingRate({ symbol: networkSymbol, accountKey });
 
     if (

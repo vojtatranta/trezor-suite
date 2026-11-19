@@ -44,7 +44,6 @@ export type AssetAccount = {
     contractAddress: TokenAddress | undefined;
     cryptoBalance: string;
     tokenInfo: TokenInfo | undefined;
-    /** Why the Home table leaves this token out, if it does. */
     hiddenReason: HiddenTokenReason | undefined;
 };
 
@@ -125,7 +124,6 @@ type StakedAccount = { account: Account; stakingAmount: StakingAmount };
 
 type NetworkCoinDefinitions = { symbol: string; coin: CoinDefinitions };
 
-// Joined to each account, so definitions landing for one network re-read that network's accounts.
 const coinDefinitionsIndex = createIndex({
     name: 'coinDefinitions',
     source: createMemoizedSelector([selectTokenDefinitions], definitions =>
@@ -137,15 +135,13 @@ const coinDefinitionsIndex = createIndex({
     getId: (definitions: NetworkCoinDefinitions) => definitions.symbol,
 });
 
-// An account and its staking amount are one entity, so a write to either re-expands that account
-// alone, and an asset account equal to the one held keeps its object.
-const createAssetAccountsIndex = (
+export const createAssetAccountsIndex = <TState extends AssetAccountsRootState>(
     name: string,
-    selectAccountsOf: (state: AssetAccountsRootState) => readonly Account[],
+    selectAccountsOf: (state: TState) => readonly Account[],
 ) => {
     const stakedAccountsIndex = createIndex({
         name: `${name}Accounts`,
-        source: createMemoizedSelector(
+        source: createWeakMapSelector.withTypes<TState>()(
             [selectAccountsOf, selectStakingAmountsOutsideBalance],
             (accounts, amounts): StakedAccount[] =>
                 accounts.map(account => ({
@@ -174,8 +170,12 @@ const createAssetAccountsIndex = (
 
 const assetAccountsIndex = createAssetAccountsIndex('assetAccounts', selectAccounts);
 
+export type AssetAccountsIndex<TState> = ReturnType<
+    typeof createAssetAccountsIndex<TState & AssetAccountsRootState>
+>;
+
 /** Only the wallet on screen: another wallet's accounts are no work this table has to do. */
-const deviceAssetAccountsIndex = createAssetAccountsIndex(
+export const deviceAssetAccountsIndex = createAssetAccountsIndex(
     'deviceAssetAccounts',
     selectVisibleDeviceAccounts,
 );
@@ -190,7 +190,6 @@ const deviceAssetAccountsByAsset = createSecondaryIndex({
     getKeys: (assetAccount: AssetAccount) => assetAccount.assetKey,
 });
 
-/** The asset accounts of the wallet on screen holding one asset, in account order. */
 export const selectDeviceAssetAccountsOfAsset = (
     state: AssetAccountsRootState,
     assetKey: WalletAssetKey | undefined,
